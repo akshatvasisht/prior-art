@@ -1,0 +1,216 @@
+# Taxonomy of common package categories
+# Used for mapping task descriptions to search queries
+
+categories:
+  - id: http_client
+    keywords: [http, request, fetch, rest, api client, curl, web request, http get, http post]
+    search_terms:
+      python: "http client requests"
+      javascript: "http client fetch axios"
+      typescript: "http client fetch axios"
+      go: "http client"
+      rust: "http client reqwest"
+      default: "http client"
+    priority_files:
+      python: ["*.pyi", "src/**/*.py", "__init__.py"]
+      typescript: ["*.d.ts", "src/**/*.ts", "index.ts"]
+      javascript: ["index.js", "src/**/*.js", "lib/**/*.js"]
+      rust: ["src/lib.rs", "src/main.rs"]
+      go: ["*.go", "pkg/**/*.go"]
+      default: ["README*", "*.md"]
+    service_note: null
+
+  - id: authentication
+    keywords: [auth, authentication, oauth, login, sso, identity, jwt, token, credential, signin]
+    search_terms:
+      python: "authentication oauth jwt"
+      javascript: "authentication oauth passport"
+      typescript: "authentication oauth passport"
+      go: "authentication jwt oauth"
+      rust: "authentication jwt oauth"
+      default: "authentication"
+    priority_files:
+      default: ["README*", "*.pyi", "*.d.ts", "src/**/*"]
+    service_note: "Authentication is a category commonly solved by managed identity services (Auth0, Okta, AWS Cognito, Firebase Auth). Consider evaluating managed alternatives alongside these open source results."
+
+  - id: database
+    keywords: [database, orm, sql, query, postgres, mysql, sqlite, mongodb, redis, db]
+    search_terms:
+      python: "database orm sqlalchemy"
+      javascript: "database orm sequelize prisma"
+      typescript: "database orm prisma typeorm"
+      go: "database orm sql"
+      rust: "database orm diesel sqlx"
+      default: "database orm"
+    priority_files:
+      default: ["README*", "*.pyi", "*.d.ts", "src/**/*"]
+    service_note: "Database needs are often better served by managed database services (AWS RDS, PlanetScale, MongoDB Atlas, Redis Cloud) rather than self-hosted solutions."
+
+  - id: queue
+    keywords: [queue, message, mq, rabbitmq, kafka, pubsub, event, broker, celery, job]
+    search_terms:
+      python: "queue celery message"
+      javascript: "queue bull message"
+      typescript: "queue bull message"
+      go: "queue message rabbitmq"
+      rust: "queue message async"
+      default: "queue message"
+    priority_files:
+      default: ["README*", "*.pyi", "*.d.ts", "src/**/*"]
+    service_note: "Message queues and job processing are commonly handled by managed services (AWS SQS, Google Pub/Sub, Azure Service Bus, RabbitMQ Cloud). Consider managed alternatives for production workloads."
+
+  - id: cache
+    keywords: [cache, caching, redis, memcache, memory, lru, ttl]
+    search_terms:
+      python: "cache redis memcache"
+      javascript: "cache redis node-cache"
+      typescript: "cache redis node-cache"
+      go: "cache redis memcache"
+      rust: "cache lru redis"
+      default: "cache"
+    priority_files:
+      default: ["README*", "*.pyi", "*.d.ts", "src/**/*"]
+    service_note: null
+
+  - id: parser
+    keywords: [parser, parse, lexer, ast, grammar, syntax, compiler, interpreter]
+    search_terms:
+      python: "parser ast grammar"
+      javascript: "parser ast babel acorn"
+      typescript: "parser ast typescript"
+      go: "parser ast"
+      rust: "parser nom pest"
+      default: "parser"
+    priority_files:
+      default: ["README*", "*.pyi", "*.d.ts", "src/**/*"]
+    service_note: null
+
+  - id: crypto
+    keywords: [crypto, encryption, decrypt, hash, cipher, security, cryptography]
+    search_terms:
+      python: "cryptography encryption"
+      javascript: "crypto encryption"
+      typescript: "crypto encryption"
+      go: "crypto encryption"
+      rust: "crypto encryption"
+      default: "cryptography"
+    priority_files:
+      default: ["README*", "*.pyi", "*.d.ts", "src/**/*"]
+    service_note: null
+
+  - id: testing
+    keywords: [test, testing, unit test, mock, pytest, jest, mocha, assertion]
+    search_terms:
+      python: "testing pytest mock"
+      javascript: "testing jest mocha"
+      typescript: "testing jest vitest"
+      go: "testing testify"
+      rust: "testing test"
+      default: "testing"
+    priority_files:
+      default: ["README*", "*.pyi", "*.d.ts", "src/**/*"]
+    service_note: null
+
+  - id: logging
+    keywords: [log, logging, logger, loguru, winston, pino, trace, debug]
+    search_terms:
+      python: "logging loguru"
+      javascript: "logging winston pino"
+      typescript: "logging winston pino"
+      go: "logging zap logrus"
+      rust: "logging tracing log"
+      default: "logging"
+    priority_files:
+      default: ["README*", "*.pyi", "*.d.ts", "src/**/*"]
+    service_note: "For production logging, consider managed log aggregation services (Datadog, New Relic, CloudWatch, Splunk) which provide search, alerting, and retention without infrastructure management."
+
+  - id: cli
+    keywords: [cli, command line, terminal, console, argparse, click, commander, cobra]
+    search_terms:
+      python: "cli click typer"
+      javascript: "cli commander yargs"
+      typescript: "cli commander oclif"
+      go: "cli cobra urfave"
+      rust: "cli clap"
+      default: "cli command"
+    priority_files:
+      default: ["README*", "*.pyi", "*.d.ts", "src/**/*"]
+    service_note: null
+
+  - id: web_framework
+    keywords: [web, framework, server, fastapi, express, django, flask, gin, actix]
+    search_terms:
+      python: "web framework fastapi flask django"
+      javascript: "web framework express koa"
+      typescript: "web framework express nestjs"
+      go: "web framework gin fiber echo"
+      rust: "web framework actix rocket"
+      default: "web framework"
+    priority_files:
+      default: ["README*", "*.pyi", "*.d.ts", "src/**/*"]
+    service_note: null
+
+  - id: validation
+    keywords: [validation, validator, schema, validate, pydantic, joi, zod, ajv]
+    search_terms:
+      python: "validation pydantic schema"
+      javascript: "validation joi ajv"
+      typescript: "validation zod joi"
+      go: "validation validator"
+      rust: "validation serde validator"
+      default: "validation schema"
+    priority_files:
+      default: ["README*", "*.pyi", "*.d.ts", "src/**/*"]
+    service_note: null
+
+  - id: datetime
+    keywords: [date, time, datetime, timestamp, timezone, moment, chronos, arrow]
+    search_terms:
+      python: "datetime arrow pendulum"
+      javascript: "datetime moment dayjs"
+      typescript: "datetime dayjs date-fns"
+      go: "datetime time"
+      rust: "datetime chrono time"
+      default: "datetime"
+    priority_files:
+      default: ["README*", "*.pyi", "*.d.ts", "src/**/*"]
+    service_note: null
+
+  - id: email
+    keywords: [email, mail, smtp, send email, mailer, sendgrid, mailgun]
+    search_terms:
+      python: "email smtp mail"
+      javascript: "email nodemailer mail"
+      typescript: "email nodemailer mail"
+      go: "email smtp mail"
+      rust: "email smtp mail"
+      default: "email smtp"
+    priority_files:
+      default: ["README*", "*.pyi", "*.d.ts", "src/**/*"]
+    service_note: "Email delivery is commonly handled by transactional email services (SendGrid, Mailgun, AWS SES, Postmark) which provide deliverability, analytics, and compliance features."
+
+  - id: websocket
+    keywords: [websocket, ws, socket, realtime, socketio, websockets]
+    search_terms:
+      python: "websocket websockets socketio"
+      javascript: "websocket ws socket.io"
+      typescript: "websocket ws socket.io"
+      go: "websocket gorilla"
+      rust: "websocket tungstenite"
+      default: "websocket"
+    priority_files:
+      default: ["README*", "*.pyi", "*.d.ts", "src/**/*"]
+    service_note: null
+
+  - id: rate_limiter
+    keywords: [rate limit, throttle, rate limiter, bucket, limiting]
+    search_terms:
+      python: "rate limit throttle"
+      javascript: "rate limit throttle"
+      typescript: "rate limit throttle"
+      go: "rate limit throttle"
+      rust: "rate limit throttle"
+      default: "rate limit"
+    priority_files:
+      default: ["README*", "*.pyi", "*.d.ts", "src/**/*"]
+    service_note: null

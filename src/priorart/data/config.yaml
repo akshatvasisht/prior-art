@@ -1,0 +1,105 @@
+# priorart Configuration File
+# All tunable parameters with research citations where applicable
+
+# Repository ingestion settings
+ingestion:
+  char_budget: 24000                   # Default context budget; increase for larger context windows
+  ingest_max_repo_mb: 100              # Reject repos above this size before fetching content
+  ingest_timeout_seconds: 30           # GitIngest call timeout
+
+# Floor filter thresholds
+floor_filter:
+  min_weekly_downloads: 350            # Koch et al. MADWeb 2024: 90% below this are noise
+  min_stars: 50                        # Noise floor only when download data unavailable
+
+# Scoring dimension weights (must sum to 1.0)
+weights:
+  reliability: 0.30                    # Response to external demand (issues/PRs)
+  adoption: 0.20                       # Usage and community signals
+  versioning: 0.20                     # Release patterns and stability
+  activity_regularity: 0.15            # Self-directed development consistency
+  dependency_health: 0.15              # Transitive dependency quality
+
+# Reliability dimension parameters
+reliability:
+  issues_sufficient_min_count: 10      # Minimum for stable median/MAD calculation
+  open_to_closed_ratio_threshold: 2.0  # CHAOSS/GrimoireLab: sustainable vs growing backlog
+  last_close_stale_days_warning: 365   # Coelho et al. 2017: 12-month early warning
+  last_close_stale_days_dormant: 540   # Coelho et al. 2017: 18-month dormancy threshold
+  null_state_scores:
+    issues_disabled: 0.50               # Neutral prior - no signal
+    low_volume_healthy: 0.65            # Elevated neutral - positive partial signal
+    low_volume_backlog: 0.25            # Penalized - negative partial signal
+
+# Adoption dimension parameters
+adoption:
+  committer_saturation: 10              # Borges et al. 2018: Q1 of top repos = 8
+  revdep_saturation: 200                # Zerouali et al. 2018: 200+ deps → zero abandonment
+  fsr_reference:                        # Borges & Valente JSS 2018 + Octoverse 2022
+    python: 0.13
+    javascript: 0.10
+    typescript: 0.10
+    go: 0.12
+    rust: 0.08
+    java: 0.14
+    default: 0.13
+
+# Versioning dimension parameters
+versioning:
+  recency_halflife_days: 180            # Mens et al. 2014: central estimate; tune per ecosystem
+  is_current_partial_score: 0.5         # Partial credit for legacy LTS branches
+
+# Dependency health parameters
+dependency_health:
+  dep_health_deprecated_threshold: 2    # Flag if deprecated_dep_count exceeds this
+
+# Age confidence multiplier parameters
+confidence:
+  full_trust_age_years: 3.0             # Coelho et al. 2017: 3+ years → lower abandonment
+  neutral_prior: 0.5                    # Bayesian neutral prior for young libraries
+
+# Abandonment detection (two-threshold model)
+abandonment:
+  early_warning_days: 365               # Coelho et al. 2017: 12-month inactivity
+  dormant_days: 540                     # Coelho et al. 2017: 18-month dormancy
+  open_to_closed_ratio_threshold: 2.0   # CHAOSS threshold
+
+# Recommendation thresholds
+recommendation:
+  use_existing_min: 75                  # Score >= 75: use the existing package
+  evaluate_min: 50                      # Score 50-74: evaluate before deciding
+  # Score < 50: build custom solution
+
+# GitHub API configuration
+github:
+  stagger_interval_ms: 100              # Conservative rate-limit buffer
+  issues_lookback_months: 12            # MTTR calculation window
+  issues_max_pages: 2                   # Hard cap: 200 issues (sufficient for median/MAD)
+  commits_lookback_weeks: 104           # Popoola et al. 2025: 2-year regularity window
+
+# Cache freshness windows (days)
+cache_freshness:
+  version_release: 2                    # Releases change frequently
+  weekly_downloads: 7                   # Weekly data refreshes weekly
+  fsr_abandonment: 30                   # Repo metadata is slow-moving
+  mttr_mad: 21                          # Issue patterns shift over weeks
+  commit_regularity: 21                 # Commit patterns shift over weeks
+  version_graph_stability: 30           # Release history is slow-moving
+  dependency_health: 7                  # CVEs can surface quickly
+
+# Security settings
+security:
+  allowed_repo_hosts:                   # Only these GitHub URLs are accepted
+    - "github.com"
+  prompt_injection_patterns:            # Patterns to scan for in READMEs
+    - "IGNORE PREVIOUS"
+    - "SYSTEM:"
+    - "[INST]"
+    - "<<<OVERRIDE"
+    - "###INSTRUCTION"
+  max_readme_size_bytes: 1048576        # 1MB max for README files
+
+# Taxonomy mapping
+taxonomy:
+  confidence_threshold: 0.6              # Minimum confidence for category match
+  max_search_results: 20                 # Max candidates from registry search
