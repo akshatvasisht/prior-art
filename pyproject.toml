@@ -73,6 +73,8 @@ where = ["src"]
 priorart = [
     "data/*.yaml",
     "data/*.yml",
+    "data/seed_cache.db",
+    "data/seed_cache.db.sha256",
 ]
 
 # Tool configurations

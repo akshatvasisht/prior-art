@@ -3,6 +3,7 @@ CLI interface for priorart package discovery tool.
 """
 
 import json
+import os
 import sys
 import logging
 from typing import Optional
@@ -169,6 +170,43 @@ def cache_info() -> None:
 
     except Exception as e:
         click.echo(f"Error reading cache: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.option('--limit', default=30, type=int,
+              help='Maximum packages to cache per language')
+def seed_generate(limit: int):
+    """Generate seed cache with top packages from each ecosystem.
+
+    Pre-populates the cache to minimize cold-start latency.
+    Requires GITHUB_TOKEN environment variable.
+    """
+    import subprocess
+    from pathlib import Path
+
+    script_path = Path(__file__).parent.parent.parent / "scripts" / "generate_seed_cache.py"
+
+    if not script_path.exists():
+        click.echo(f"Error: Seed generation script not found at {script_path}", err=True)
+        sys.exit(1)
+
+    if not os.environ.get("GITHUB_TOKEN"):
+        click.echo("Error: GITHUB_TOKEN environment variable required", err=True)
+        sys.exit(1)
+
+    click.echo("Generating seed cache...")
+    click.echo("This will take several minutes...\n")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script_path), "--limit", str(limit)],
+            check=True,
+            env=os.environ.copy()
+        )
+        click.echo("\nSeed cache generated successfully!")
+    except subprocess.CalledProcessError as e:
+        click.echo(f"\nError generating seed cache: {e}", err=True)
         sys.exit(1)
 
 
