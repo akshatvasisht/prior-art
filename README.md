@@ -11,8 +11,6 @@
 ![FastMCP](https://img.shields.io/badge/FastMCP-0.5%2B-009688)
 ![Click](https://img.shields.io/badge/CLI-Click-black)
 ![License](https://img.shields.io/badge/License-MIT-green)
-[![Tests](https://github.com/priorart/priorart/actions/workflows/test.yml/badge.svg)](https://github.com/priorart/priorart/actions/workflows/test.yml)
-[![Lint](https://github.com/priorart/priorart/actions/workflows/lint.yml/badge.svg)](https://github.com/priorart/priorart/actions/workflows/lint.yml)
 
 priorart is a build-vs-borrow intelligence system for determining whether to implement custom infrastructure or adopt open-source packages. It provides deterministic package discovery and multi-dimensional health evaluation based on quantitative metrics and empirical research.
 
