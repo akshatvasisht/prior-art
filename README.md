@@ -12,33 +12,26 @@
 ![Click](https://img.shields.io/badge/CLI-Click-black)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-priorart is a build-vs-borrow intelligence system for determining whether to implement custom infrastructure or adopt open-source packages. It provides deterministic package discovery and multi-dimensional health evaluation based on quantitative metrics and empirical research.
+priorart is a deterministic package evaluation tool for build-vs-borrow decisions. Given a natural language task description and target language, it queries package registries directly, collects quantitative signals from GitHub and deps.dev, and produces a scored recommendation based on configurable, research-informed heuristics.
 
-### Research Basis
+### Research Inspiration
 
-priorart's evaluation engine is informed by empirical software engineering research on package abandonment, maintenance sustainability, and noise floors in registry data.
+Noise-floor thresholds for registry metrics are informed by **[Koch et al. (MADWeb 2024)](https://madweb.work/papers2024/)**, which quantified the weak, language-dependent correlation between GitHub stars and downstream adoption. Abandonment detection follows **[Coelho & Valente (ESEC/FSE 2017)](https://arxiv.org/abs/1707.02327)** on categorizing open-source project failure modes. Adoption saturation curves for committer diversity and reverse-dependency counts reference **[Borges & Valente (JSS 2018)](https://arxiv.org/abs/1811.07643)** and **[Zerouali et al. (ICSR 2018)](https://arxiv.org/abs/1806.01545)** on technical lag in dependency networks. Health dimensions are aligned with the **[CHAOSS Project](https://chaoss.community)** metrics framework.
 
-- **Threshold Modeling**: Noise floors for registry data (downloads/stars) derived from **Koch et al. (MADWeb 2024)**.
-- **Abandonment Detection**: Inactivity and dormancy thresholds based on **Coelho et al. (2017)**.
-- **Adoption Signals**: Committer and reverse-dependency saturation metrics informed by **Borges et al. (2018)** and **Zerouali et al. (2018)**.
-- **Sustainability Metrics**: Health indicators aligned with the **CHAOSS Project** (Community Health Analytics in Open Source Software).
+### Pipeline
 
-### How It Works
+1.  **Taxonomy Mapping** — Maps task descriptions to curated, language-specific registry search queries.
+2.  **Registry Discovery** — Fetches candidates from PyPI, npm, crates.io, or pkg.go.dev, ranked by download count.
+3.  **Signal Collection** — Enriches each candidate with GitHub repository metrics (stars, forks, MTTR, commit regularity) and deps.dev dependency health data.
+4.  **Multidimensional Scoring** — Computes weighted scores across reliability, adoption, versioning, activity regularity, and dependency health.
+5.  **Decision Classification** — Classifies packages as `use_existing` (≥75), `evaluate` (50–74), or `build` (<50).
 
-priorart implements a 5-layer evaluation pipeline:
+### Properties
 
-1.  **Taxonomy Mapping**: Maps natural language task descriptions to curated registry search queries.
-2.  **Registry Discovery**: Fetches top candidates from package registries (PyPI, npm, crates.io, pkg.go.dev) ranked by download count.
-3.  **Signal Collection**: Enriches candidates with GitHub repository signals (stars, forks, MTTR, commit regularity) and deps.dev health data.
-4.  **Multidimensional Scoring**: Computes weighted scores across reliability, adoption, versioning, activity regularity, and dependency health.
-5.  **Decision Classification**: Categorizes packages into `use_existing` (score ≥75), `evaluate` (50-74), or `build` (< 50).
-
-### Impact & Performance
-
-- **Precision Discovery**: Registry-first architecture skips GitHub search noise, focusing only on viable candidates.
-- **High Performance**: Evaluation completes in 50-200ms (cached) or 3-5s (cold).
-- **Deterministic Evaluation**: Replaces non-deterministic LLM recommendations with verifiable quantitative metrics.
-- **Security-First**: Integrated checks for typosquatting (identity verification), copyleft licenses, and dependency vulnerabilities.
+- **Registry-first discovery** — Queries registries directly; does not rely on GitHub search.
+- **Latency** — 50–200 ms cached, 3–5 s cold.
+- **Deterministic** — Scoring is fully quantitative; no LLM-generated recommendations.
+- **Supply-chain checks** — Identity verification (typosquatting), copyleft license detection, and dependency vulnerability flags.
 
 ## Documentation
 

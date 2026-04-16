@@ -11,55 +11,25 @@ Complete pipeline:
 7. Top 5 results
 """
 
-import os
 import logging
-from pathlib import Path
-from typing import Dict, Any, List, Optional
-from datetime import datetime
-from importlib.resources import files
+import os
+from datetime import datetime, timezone
+from typing import Any
 
-import yaml
-
-from .query import QueryMapper
-from .registry import get_registry_client, PackageCandidate
-from .cache import SQLiteCache, SignalSnapshot
+from .cache import SignalSnapshot, SQLiteCache
 from .deps_dev import DepsDevClient
 from .github_client import GitHubClient
+from .query import QueryMapper
+from .registry import PackageCandidate, get_registry_client
 from .scoring import PackageScorer
+from .utils import load_config
 
 logger = logging.getLogger(__name__)
 
 
-def load_config() -> Dict[str, Any]:
-    """Load configuration from bundled config.yaml.
-
-    Returns:
-        Configuration dictionary
-
-    Raises:
-        Exception: If config file is missing or invalid.
-    """
-    try:
-        config_text = files('priorart.data').joinpath('config.yaml').read_text()
-        config = yaml.safe_load(config_text)
-
-        # Validate weights
-        weight_sum = sum(config['weights'].values())
-        if abs(weight_sum - 1.0) > 0.01:
-            raise ValueError(f"Scoring weights must sum to 1.0, got {weight_sum}")
-
-        return config
-
-    except Exception as e:
-        logger.error(f"Failed to load config: {e}")
-        raise
-
-
 def find_alternatives(
-    language: str,
-    task_description: str,
-    explain: bool = False
-) -> Dict[str, Any]:
+    language: str, task_description: str, explain: bool = False
+) -> dict[str, Any]:
     """Find alternative packages for a given task.
 
     This tool helps AI agents make build-vs-borrow decisions by discovering
@@ -89,7 +59,7 @@ def find_alternatives(
 
         # Initialize components
         cache = SQLiteCache()
-        query_mapper = QueryMapper(confidence_threshold=config['taxonomy']['confidence_threshold'])
+        query_mapper = QueryMapper(confidence_threshold=config["taxonomy"]["confidence_threshold"])
         scorer = PackageScorer(config)
 
         # Step 1: Map task description to search query
@@ -99,16 +69,15 @@ def find_alternatives(
             return query_mapper.get_no_match_response()
 
         # Step 2: Search registry
-        registry_client = get_registry_client(language)
-        max_results = config['taxonomy']['max_search_results']
-
-        candidates = registry_client.search(query_result.search_query, max_results)
+        max_results = config["taxonomy"]["max_search_results"]
+        with get_registry_client(language) as registry_client:
+            candidates = registry_client.search(query_result.search_query, max_results)
 
         if not candidates:
             return {
                 "status": "no_results",
                 "message": f"No packages found matching '{query_result.search_query}'",
-                "service_note": query_result.service_note
+                "service_note": query_result.service_note,
             }
 
         # Step 3: Collect detailed package data
@@ -117,11 +86,7 @@ def find_alternatives(
         for candidate in candidates:
             try:
                 package_data = _collect_package_signals(
-                    candidate,
-                    language,
-                    cache,
-                    config,
-                    query_result.service_note
+                    candidate, language, cache, config, query_result.service_note
                 )
 
                 if package_data:
@@ -135,7 +100,7 @@ def find_alternatives(
             return {
                 "status": "no_results",
                 "message": "No packages met the minimum quality thresholds",
-                "service_note": query_result.service_note
+                "service_note": query_result.service_note,
             }
 
         # Step 4: Apply floor filter
@@ -145,7 +110,7 @@ def find_alternatives(
             return {
                 "status": "below_threshold",
                 "message": "All candidates were below minimum download/star thresholds",
-                "service_note": query_result.service_note
+                "service_note": query_result.service_note,
             }
 
         # Step 5: Score packages
@@ -203,24 +168,21 @@ def find_alternatives(
             "status": "success",
             "count": len(results),
             "packages": results,
-            "service_note": query_result.service_note
+            "service_note": query_result.service_note,
         }
 
     except Exception as e:
         logger.error(f"Error in find_alternatives: {e}", exc_info=True)
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+        return {"status": "error", "message": str(e)}
 
 
 def _collect_package_signals(
     candidate: PackageCandidate,
     language: str,
     cache: SQLiteCache,
-    config: Dict[str, Any],
-    service_note: Optional[str]
-) -> Optional[Dict[str, Any]]:
+    config: dict[str, Any],
+    service_note: str | None,
+) -> dict[str, Any] | None:
     """Collect all signals for a package, using cache when fresh.
 
     Args:
@@ -259,9 +221,9 @@ def _collect_package_signals(
     if not github_url:
         # Try deps.dev fallback
         try:
-            deps_client = DepsDevClient()
-            github_url = deps_client.get_identity_fallback(candidate.name, candidate.registry)
-        except:
+            with DepsDevClient() as deps_client:
+                github_url = deps_client.get_identity_fallback(candidate.name, candidate.registry)
+        except Exception:
             pass
 
     if not github_url:
@@ -271,30 +233,22 @@ def _collect_package_signals(
     package_data["github_url"] = github_url
     package_data["url"] = github_url
 
-    # Parse GitHub URL for full_name
-    import re
-    match = re.match(r'https://github\.com/([^/]+)/([^/]+)', github_url)
-    if match:
-        owner, repo = match.groups()
-        package_data["full_name"] = f"{owner}/{repo}"
-    else:
-        package_data["full_name"] = candidate.name
+    # github_url is already normalized to https://github.com/owner/repo
+    parts = github_url.rstrip("/").split("/")
+    package_data["full_name"] = f"{parts[-2]}/{parts[-1]}" if len(parts) >= 5 else candidate.name
 
     # Verify identity if needed
     identity_verified = True
     if needs_github:
         try:
-            github_token = os.getenv('GITHUB_TOKEN')
+            github_token = os.getenv("GITHUB_TOKEN")
             if github_token:
                 github_client = GitHubClient(
-                    token=github_token,
-                    stagger_ms=config['github']['stagger_interval_ms']
+                    token=github_token, stagger_ms=config["github"]["stagger_interval_ms"]
                 )
 
                 identity_verified = github_client.verify_identity(
-                    github_url,
-                    candidate.name,
-                    candidate.maintainers or []
+                    github_url, candidate.name, candidate.maintainers or []
                 )
 
                 if not identity_verified:
@@ -310,29 +264,30 @@ def _collect_package_signals(
     # Collect signals from cache or fresh API calls
     if snapshot:
         # Use cached data
-        package_data.update({
-            "weekly_downloads": snapshot.weekly_downloads,
-            "download_percentile": snapshot.download_percentile,
-            "star_count": snapshot.star_count,
-            "fork_count": snapshot.fork_count,
-            "fork_to_star_ratio": snapshot.fork_to_star_ratio,
-            "days_since_last_commit": snapshot.days_since_last_commit,
-            "open_issue_count": snapshot.open_issue_count,
-            "closed_issues_last_year": snapshot.closed_issues_last_year,
-            "mttr_median_days": snapshot.mttr_median_days,
-            "mttr_mad": snapshot.mttr_mad,
-            "mttr_state": snapshot.mttr_state or "unknown",
-            "weekly_commit_cv": snapshot.weekly_commit_cv,
-            "recent_committer_count": snapshot.recent_committer_count,
-            "first_release_date": snapshot.first_release_date,
-            "latest_version": snapshot.latest_version,
-            "release_cv": snapshot.release_cv,
-            "major_versions_per_year": snapshot.major_versions_per_year,
-            "direct_dep_count": snapshot.direct_dep_count,
-            "vulnerable_dep_count": snapshot.vulnerable_dep_count,
-            "deprecated_dep_count": snapshot.deprecated_dep_count,
-            "reverse_dep_count": snapshot.reverse_dep_count,
-        })
+        package_data.update(
+            {
+                "weekly_downloads": snapshot.weekly_downloads,
+                "star_count": snapshot.star_count,
+                "fork_count": snapshot.fork_count,
+                "fork_to_star_ratio": snapshot.fork_to_star_ratio,
+                "days_since_last_commit": snapshot.days_since_last_commit,
+                "open_issue_count": snapshot.open_issue_count,
+                "closed_issues_last_year": snapshot.closed_issues_last_year,
+                "mttr_median_days": snapshot.mttr_median_days,
+                "mttr_mad": snapshot.mttr_mad,
+                "mttr_state": snapshot.mttr_state or "unknown",
+                "weekly_commit_cv": snapshot.weekly_commit_cv,
+                "recent_committer_count": snapshot.recent_committer_count,
+                "first_release_date": snapshot.first_release_date,
+                "latest_version": snapshot.latest_version,
+                "release_cv": snapshot.release_cv,
+                "major_versions_per_year": snapshot.major_versions_per_year,
+                "direct_dep_count": snapshot.direct_dep_count,
+                "vulnerable_dep_count": snapshot.vulnerable_dep_count,
+                "deprecated_dep_count": snapshot.deprecated_dep_count,
+                "reverse_dep_count": snapshot.reverse_dep_count,
+            }
+        )
     else:
         # Fetch fresh data (cold cache)
         package_data.update(_fetch_fresh_signals(candidate, github_url, config))
@@ -347,10 +302,8 @@ def _collect_package_signals(
 
 
 def _fetch_fresh_signals(
-    candidate: PackageCandidate,
-    github_url: str,
-    config: Dict[str, Any]
-) -> Dict[str, Any]:
+    candidate: PackageCandidate, github_url: str, config: dict[str, Any]
+) -> dict[str, Any]:
     """Fetch fresh signals from APIs.
 
     Args:
@@ -364,65 +317,70 @@ def _fetch_fresh_signals(
     signals = {}
 
     # Get GitHub signals
-    github_token = os.getenv('GITHUB_TOKEN')
+    github_token = os.getenv("GITHUB_TOKEN")
     if github_token:
         try:
             github_client = GitHubClient(
-                token=github_token,
-                stagger_ms=config['github']['stagger_interval_ms']
+                token=github_token, stagger_ms=config["github"]["stagger_interval_ms"]
             )
 
             parsed = github_client.parse_github_url(github_url)
             if parsed:
                 owner, repo = parsed
                 gh_signals = github_client.get_repository_signals(
-                    owner, repo,
-                    issues_lookback_months=config['github']['issues_lookback_months'],
-                    commits_lookback_weeks=config['github']['commits_lookback_weeks'],
-                    issues_max_pages=config['github']['issues_max_pages']
+                    owner,
+                    repo,
+                    issues_lookback_months=config["github"]["issues_lookback_months"],
+                    commits_lookback_weeks=config["github"]["commits_lookback_weeks"],
+                    issues_max_pages=config["github"]["issues_max_pages"],
                 )
 
                 if gh_signals:
-                    signals.update({
-                        "star_count": gh_signals.star_count,
-                        "fork_count": gh_signals.fork_count,
-                        "fork_to_star_ratio": gh_signals.fork_to_star_ratio if gh_signals.fork_count and gh_signals.star_count else 0,
-                        "days_since_last_commit": gh_signals.days_since_last_commit,
-                        "open_issue_count": gh_signals.open_issues_count,
-                        "closed_issues_last_year": gh_signals.closed_issues_last_year,
-                        "mttr_median_days": gh_signals.mttr_median_days,
-                        "mttr_mad": gh_signals.mttr_mad,
-                        "mttr_state": gh_signals.mttr_state,
-                        "weekly_commit_cv": gh_signals.weekly_commit_cv,
-                        "recent_committer_count": gh_signals.recent_committer_count,
-                    })
-
-                    if gh_signals.fork_count and gh_signals.star_count:
-                        signals["fork_to_star_ratio"] = gh_signals.fork_count / gh_signals.star_count
+                    signals.update(
+                        {
+                            "star_count": gh_signals.star_count,
+                            "fork_count": gh_signals.fork_count,
+                            "fork_to_star_ratio": (gh_signals.fork_count / gh_signals.star_count)
+                            if (gh_signals.fork_count and gh_signals.star_count)
+                            else 0,
+                            "days_since_last_commit": gh_signals.days_since_last_commit,
+                            "open_issue_count": gh_signals.open_issues_count,
+                            "closed_issues_last_year": gh_signals.closed_issues_last_year,
+                            "mttr_median_days": gh_signals.mttr_median_days,
+                            "mttr_mad": gh_signals.mttr_mad,
+                            "mttr_state": gh_signals.mttr_state,
+                            "weekly_commit_cv": gh_signals.weekly_commit_cv,
+                            "recent_committer_count": gh_signals.recent_committer_count,
+                        }
+                    )
 
         except Exception as e:
             logger.warning(f"GitHub API error: {e}")
 
     # Get deps.dev data
     try:
-        deps_client = DepsDevClient()
-        deps_data = deps_client.get_package_data(candidate.name, candidate.registry)
+        with DepsDevClient() as deps_client:
+            deps_data = deps_client.get_package_data(candidate.name, candidate.registry)
 
         if deps_data:
-            signals.update({
-                "first_release_date": deps_data.first_release_date,
-                "latest_version": deps_data.latest_version,
-                "release_cv": deps_data.release_cv,
-                "major_versions_per_year": deps_data.major_versions_per_year,
-                "reverse_dep_count": deps_data.reverse_dep_count,
-            })
+            signals.update(
+                {
+                    "first_release_date": deps_data.first_release_date,
+                    "latest_version": deps_data.latest_version,
+                    "release_cv": deps_data.release_cv,
+                    "major_versions_per_year": deps_data.major_versions_per_year,
+                    "reverse_dep_count": deps_data.reverse_dep_count,
+                }
+            )
 
             if deps_data.dependency_info:
-                signals.update({
-                    "direct_dep_count": deps_data.dependency_info.direct_count,
-                    "vulnerable_dep_count": deps_data.dependency_info.vulnerable_count,
-                    "deprecated_dep_count": deps_data.dependency_info.deprecated_count,
-                })
+                signals.update(
+                    {
+                        "direct_dep_count": deps_data.dependency_info.direct_count,
+                        "vulnerable_dep_count": deps_data.dependency_info.vulnerable_count,
+                        "deprecated_dep_count": deps_data.dependency_info.deprecated_count,
+                    }
+                )
 
     except Exception as e:
         logger.warning(f"deps.dev error: {e}")
@@ -434,7 +392,9 @@ def _fetch_fresh_signals(
     return signals
 
 
-def _save_to_cache(candidate: PackageCandidate, package_data: Dict[str, Any], cache: SQLiteCache) -> None:
+def _save_to_cache(
+    candidate: PackageCandidate, package_data: dict[str, Any], cache: SQLiteCache
+) -> None:
     """Save package signals to cache.
 
     Args:
@@ -472,13 +432,12 @@ def _save_to_cache(candidate: PackageCandidate, package_data: Dict[str, Any], ca
     )
 
     # Set refresh timestamps
-    snapshot.downloads_refreshed_at = datetime.utcnow()
-    snapshot.repo_refreshed_at = datetime.utcnow()
-    snapshot.mttr_refreshed_at = datetime.utcnow()
-    snapshot.regularity_refreshed_at = datetime.utcnow()
-    snapshot.version_refreshed_at = datetime.utcnow()
-    snapshot.dep_health_refreshed_at = datetime.utcnow()
+    now = datetime.now(timezone.utc)
+    snapshot.downloads_refreshed_at = now
+    snapshot.repo_refreshed_at = now
+    snapshot.mttr_refreshed_at = now
+    snapshot.regularity_refreshed_at = now
+    snapshot.version_refreshed_at = now
+    snapshot.dep_health_refreshed_at = now
 
     cache.set(snapshot)
-
-

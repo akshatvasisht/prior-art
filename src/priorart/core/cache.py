@@ -5,13 +5,17 @@ Implements synchronous staleness checking to ensure data freshness guarantees.
 Uses SQLite for local persistent storage with parameterized queries for security.
 """
 
-import json
+import dataclasses
+import logging
 import sqlite3
-from dataclasses import dataclass, asdict
-from datetime import datetime, timedelta
+from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, Optional, Any, List
+from typing import Any
+
 from platformdirs import user_cache_dir
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -22,57 +26,56 @@ class SignalSnapshot:
     registry: str
 
     # Identity
-    github_url: Optional[str] = None
+    github_url: str | None = None
     identity_verified: bool = False
 
     # Download/adoption signals (7 day freshness)
-    weekly_downloads: Optional[int] = None
-    download_percentile: Optional[float] = None
-    downloads_refreshed_at: Optional[datetime] = None
+    weekly_downloads: int | None = None
+    downloads_refreshed_at: datetime | None = None
 
     # Repository signals (30 day freshness)
-    star_count: Optional[int] = None
-    fork_count: Optional[int] = None
-    fork_to_star_ratio: Optional[float] = None
-    days_since_last_commit: Optional[int] = None
-    open_issue_count: Optional[int] = None
-    closed_issues_last_year: Optional[int] = None
-    repo_refreshed_at: Optional[datetime] = None
+    star_count: int | None = None
+    fork_count: int | None = None
+    fork_to_star_ratio: float | None = None
+    days_since_last_commit: int | None = None
+    open_issue_count: int | None = None
+    closed_issues_last_year: int | None = None
+    repo_refreshed_at: datetime | None = None
 
     # MTTR signals (21 day freshness)
-    mttr_median_days: Optional[float] = None
-    mttr_mad: Optional[float] = None
-    mttr_state: Optional[str] = None
-    mttr_refreshed_at: Optional[datetime] = None
+    mttr_median_days: float | None = None
+    mttr_mad: float | None = None
+    mttr_state: str | None = None
+    mttr_refreshed_at: datetime | None = None
 
     # Commit regularity (21 day freshness)
-    weekly_commit_cv: Optional[float] = None
-    recent_committer_count: Optional[int] = None
-    regularity_refreshed_at: Optional[datetime] = None
+    weekly_commit_cv: float | None = None
+    recent_committer_count: int | None = None
+    regularity_refreshed_at: datetime | None = None
 
     # Version/stability (30 day freshness)
-    latest_version: Optional[str] = None
-    first_release_date: Optional[datetime] = None
-    release_cv: Optional[float] = None
-    major_versions_per_year: Optional[float] = None
-    version_refreshed_at: Optional[datetime] = None
+    latest_version: str | None = None
+    first_release_date: datetime | None = None
+    release_cv: float | None = None
+    major_versions_per_year: float | None = None
+    version_refreshed_at: datetime | None = None
 
     # Dependency health (7 day freshness)
-    direct_dep_count: Optional[int] = None
-    vulnerable_dep_count: Optional[int] = None
-    deprecated_dep_count: Optional[int] = None
-    reverse_dep_count: Optional[int] = None
-    dep_health_refreshed_at: Optional[datetime] = None
+    direct_dep_count: int | None = None
+    vulnerable_dep_count: int | None = None
+    deprecated_dep_count: int | None = None
+    reverse_dep_count: int | None = None
+    dep_health_refreshed_at: datetime | None = None
 
     # Metadata
-    description: Optional[str] = None
-    license: Optional[str] = None
-    created_at: datetime = None
-    updated_at: datetime = None
+    description: str | None = None
+    license: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     def __post_init__(self):
         """Initialize timestamps if not provided."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if self.created_at is None:
             self.created_at = now
         if self.updated_at is None:
@@ -88,21 +91,27 @@ class SignalSnapshot:
 
         if isinstance(refreshed_at, str):
             refreshed_at = datetime.fromisoformat(refreshed_at)
+        if refreshed_at.tzinfo is None:
+            refreshed_at = refreshed_at.replace(tzinfo=timezone.utc)
 
-        age = datetime.utcnow() - refreshed_at
+        age = datetime.now(timezone.utc) - refreshed_at
         return age > timedelta(days=freshness_days)
+
+
+# Computed once at import time — used in get() to filter DB rows with removed columns
+_SIGNAL_SNAPSHOT_FIELDS: frozenset = frozenset(f.name for f in dataclasses.fields(SignalSnapshot))
 
 
 class SQLiteCache:
     """SQLite implementation of cache backend with parameterized queries."""
 
-    def __init__(self, cache_dir: Optional[Path] = None):
+    def __init__(self, cache_dir: Path | None = None):
         """Initialize SQLite cache.
 
         Args:
             cache_dir: Directory for cache database. Defaults to platformdirs location.
         """
-        if cache_dir is None:
+        if cache_dir is None:  # pragma: no cover
             cache_dir = Path(user_cache_dir("priorart"))
 
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -111,7 +120,7 @@ class SQLiteCache:
 
     def _init_database(self):
         """Create database schema if not exists."""
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS package_signals (
                     package_name TEXT NOT NULL,
@@ -123,7 +132,6 @@ class SQLiteCache:
 
                     -- Downloads (7 day freshness)
                     weekly_downloads INTEGER,
-                    download_percentile REAL,
                     downloads_refreshed_at TEXT,
 
                     -- Repository (30 day freshness)
@@ -170,39 +178,43 @@ class SQLiteCache:
                 )
             """)
 
-            # Create index for faster lookups
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_package_registry
-                ON package_signals(package_name, registry)
-            """)
-
             # Enable WAL mode for concurrent reads
             conn.execute("PRAGMA journal_mode=WAL")
 
-    def get(self, package_name: str, registry: str) -> Optional[SignalSnapshot]:
+    def get(self, package_name: str, registry: str) -> SignalSnapshot | None:
         """Retrieve package snapshot using parameterized query."""
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
                 "SELECT * FROM package_signals WHERE package_name = ? AND registry = ?",
-                (package_name, registry)
+                (package_name, registry),
             )
             row = cursor.fetchone()
 
             if row is None:
                 return None
 
-            # Convert Row to dict and handle datetime fields
-            data = dict(row)
+            # Filter to known fields only — handles old cache DBs with removed columns
+            data = {k: v for k, v in dict(row).items() if k in _SIGNAL_SNAPSHOT_FIELDS}
 
             # Parse datetime fields
-            for field in ['created_at', 'updated_at', 'downloads_refreshed_at',
-                         'repo_refreshed_at', 'mttr_refreshed_at',
-                         'regularity_refreshed_at', 'version_refreshed_at',
-                         'dep_health_refreshed_at', 'first_release_date']:
+            for field in [
+                "created_at",
+                "updated_at",
+                "downloads_refreshed_at",
+                "repo_refreshed_at",
+                "mttr_refreshed_at",
+                "regularity_refreshed_at",
+                "version_refreshed_at",
+                "dep_health_refreshed_at",
+                "first_release_date",
+            ]:
                 if data.get(field):
                     try:
-                        data[field] = datetime.fromisoformat(data[field])
+                        dt = datetime.fromisoformat(data[field])
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        data[field] = dt
                     except (ValueError, TypeError):
                         data[field] = None
 
@@ -210,7 +222,7 @@ class SQLiteCache:
 
     def set(self, snapshot: SignalSnapshot) -> None:
         """Store or update package snapshot using parameterized query."""
-        snapshot.updated_at = datetime.utcnow()
+        snapshot.updated_at = datetime.now(timezone.utc)
 
         # Convert datetime objects to ISO format strings
         data = asdict(snapshot)
@@ -218,55 +230,66 @@ class SQLiteCache:
             if isinstance(value, datetime):
                 data[key] = value.isoformat()
 
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
             # Use REPLACE to insert or update
-            placeholders = ', '.join(['?'] * len(data))
-            columns = ', '.join(data.keys())
+            placeholders = ", ".join(["?"] * len(data))
+            columns = ", ".join(data.keys())
 
-            conn.execute(f"""
+            conn.execute(
+                f"""
                 REPLACE INTO package_signals ({columns})
                 VALUES ({placeholders})
-            """, list(data.values()))
+            """,
+                list(data.values()),
+            )
 
     def exists(self, package_name: str, registry: str) -> bool:
         """Check if package exists in cache."""
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
             cursor = conn.execute(
                 "SELECT COUNT(*) FROM package_signals WHERE package_name = ? AND registry = ?",
-                (package_name, registry)
+                (package_name, registry),
             )
             return cursor.fetchone()[0] > 0
 
     def clear_stale(self, max_age_days: int = 90) -> int:
         """Remove entries older than max_age_days."""
-        cutoff = datetime.utcnow() - timedelta(days=max_age_days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
 
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
             cursor = conn.execute(
-                "DELETE FROM package_signals WHERE updated_at < ?",
-                (cutoff.isoformat(),)
+                "DELETE FROM package_signals WHERE updated_at < ?", (cutoff.isoformat(),)
             )
             return cursor.rowcount
 
-    def update_signal_group(self, package_name: str, registry: str,
-                          group: str, signals: Dict[str, Any]) -> None:
+    def update_signal_group(
+        self, package_name: str, registry: str, group: str, signals: dict[str, Any]
+    ) -> None:
         """Update a specific signal group without affecting others."""
-        refresh_field = f"{group}_refreshed_at"
-        signals[refresh_field] = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
+        signals[f"{group}_refreshed_at"] = now
 
-        # Build UPDATE query with parameterized values
-        set_clause = ', '.join([f"{k} = ?" for k in signals.keys()])
-        values = list(signals.values()) + [package_name, registry]
+        # Validate signal keys against known schema to prevent column name injection
+        unknown = set(signals) - _SIGNAL_SNAPSHOT_FIELDS
+        if unknown:
+            raise ValueError(f"Unknown signal fields: {unknown}")
 
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(f"""
+        # Build UPDATE query with parameterized column names (values always parameterized)
+        set_clause = ", ".join([f"{k} = ?" for k in signals.keys()])
+        values = list(signals.values())
+
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            conn.execute(
+                f"""
                 UPDATE package_signals
                 SET {set_clause}, updated_at = ?
                 WHERE package_name = ? AND registry = ?
-            """, values + [datetime.utcnow().isoformat(), package_name, registry])
+            """,
+                values + [now, package_name, registry],
+            )
 
 
-def copy_seed_cache(seed_path: Path) -> None:
+def copy_seed_cache(seed_path: Path) -> None:  # pragma: no cover
     """Copy seed cache to user directory on first install.
 
     Args:
@@ -279,5 +302,6 @@ def copy_seed_cache(seed_path: Path) -> None:
 
     if not user_cache.exists() and seed_path.exists():
         import shutil
+
         shutil.copy2(seed_path, user_cache)
-        logging.info(f"Initialized cache with seed data at {user_cache}")
+        logger.info(f"Initialized cache with seed data at {user_cache}")

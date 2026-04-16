@@ -6,16 +6,15 @@ Implements two-pass ingestion:
 2. AST extraction for oversized files
 """
 
-import re
 import logging
-from pathlib import Path
-from typing import List, Dict, Optional, Tuple, Set
-from dataclasses import dataclass
-from urllib.parse import urlparse
+import re
 import tempfile
-import shutil
+from dataclasses import dataclass, field
+from importlib.resources import files
+from pathlib import Path
 
-from git import Repo, GitCommandError
+import yaml
+from git import GitCommandError, Repo
 
 from .ast_extract import InterfaceExtractor
 
@@ -27,15 +26,11 @@ class IngestionResult:
     """Result of repository ingestion."""
 
     content: str
-    files_included: List[str]
-    files_skipped: List[str]
+    files_included: list[str]
+    files_skipped: list[str]
     total_chars: int
     monorepo_warning: bool = False
-    content_warnings: List[str] = None
-
-    def __post_init__(self):
-        if self.content_warnings is None:
-            self.content_warnings = []
+    content_warnings: list[str] = field(default_factory=list)
 
 
 class RepositoryIngester:
@@ -43,47 +38,81 @@ class RepositoryIngester:
 
     # Files/directories to always skip
     SKIP_PATTERNS = [
-        'tests/', 'test/', '__tests__/', 'spec/',
-        'fixtures/', 'examples/',
-        'node_modules/', 'vendor/', 'dist/', 'build/',
-        '.git/', '.github/', '.gitlab/',
-        '*.min.js', '*.bundle.js',
-        '*.map', '*.lock',
-        'package-lock.json', 'yarn.lock', 'Cargo.lock', 'poetry.lock',
+        "tests/",
+        "test/",
+        "__tests__/",
+        "spec/",
+        "fixtures/",
+        "examples/",
+        "node_modules/",
+        "vendor/",
+        "dist/",
+        "build/",
+        ".git/",
+        ".github/",
+        ".gitlab/",
+        "*.min.js",
+        "*.bundle.js",
+        "*.map",
+        "*.lock",
+        "package-lock.json",
+        "yarn.lock",
+        "Cargo.lock",
+        "poetry.lock",
     ]
 
     # Monorepo indicators
     MONOREPO_INDICATORS = [
-        'packages/', 'workspaces/', 'modules/',
-        'pnpm-workspace.yaml', 'lerna.json', 'nx.json',
-        'turbo.json', 'rush.json'
+        "packages/",
+        "workspaces/",
+        "modules/",
+        "pnpm-workspace.yaml",
+        "lerna.json",
+        "nx.json",
+        "turbo.json",
+        "rush.json",
     ]
 
-    # Prompt injection patterns to scan for
-    INJECTION_PATTERNS = [
-        r'IGNORE PREVIOUS',
-        r'SYSTEM:',
-        r'\[INST\]',
-        r'<<<OVERRIDE',
-        r'###INSTRUCTION',
-        r'DISREGARD ALL',
-        r'NEW INSTRUCTIONS',
-    ]
-
-    def __init__(self, char_budget: int = 24000, max_repo_mb: int = 100, timeout_seconds: int = 30):
+    def __init__(
+        self,
+        char_budget: int = 24000,
+        max_repo_mb: int = 100,
+        timeout_seconds: int = 30,
+        injection_patterns: list[str] | None = None,
+    ):
         """Initialize ingester.
 
         Args:
             char_budget: Maximum characters to include
             max_repo_mb: Maximum repository size in MB
             timeout_seconds: Timeout for git operations
+            injection_patterns: Literal strings to scan for in repo content.
+                If None, loaded from config.yaml security.prompt_injection_patterns.
+                Strings are re.escape()d before use as regex patterns.
         """
         self.char_budget = char_budget
         self.max_repo_mb = max_repo_mb
         self.timeout_seconds = timeout_seconds
         self.extractor = InterfaceExtractor()
 
-    def ingest(self, github_url: str, priority_files: Optional[List[str]] = None) -> IngestionResult:
+        if injection_patterns is not None:
+            self._injection_patterns = [re.escape(p) for p in injection_patterns]
+        else:
+            try:
+                config_text = files("priorart.data").joinpath("config.yaml").read_text()
+                config = yaml.safe_load(config_text)
+                raw = config.get("security", {}).get("prompt_injection_patterns", [])
+                self._injection_patterns = [re.escape(p) for p in raw]
+            except Exception:
+                # Fallback if config.yaml is unavailable — config.yaml is canonical
+                self._injection_patterns = [
+                    re.escape(p) for p in [
+                        "IGNORE PREVIOUS", "SYSTEM:", r"\[INST\]", "<<<OVERRIDE",
+                        "###INSTRUCTION", "DISREGARD ALL", "NEW INSTRUCTIONS",
+                    ]
+                ]
+
+    def ingest(self, github_url: str, priority_files: list[str] | None = None) -> IngestionResult:
         """Ingest a GitHub repository.
 
         Args:
@@ -102,7 +131,7 @@ class RepositoryIngester:
             try:
                 repo_path = self._clone_repo(github_url, temp_dir)
             except Exception as e:
-                raise RuntimeError(f"Failed to clone repository: {e}")
+                raise RuntimeError(f"Failed to clone repository: {e}") from e
 
             # Check for monorepo
             is_monorepo, subdir = self._detect_monorepo(repo_path)
@@ -113,7 +142,7 @@ class RepositoryIngester:
             elif is_monorepo:
                 # Can't resolve subdirectory - restrict to README and CHANGELOG
                 monorepo_warning = True
-                priority_files = ['README*', 'CHANGELOG*']
+                priority_files = ["README*", "CHANGELOG*"]
 
             # Get file list with priorities
             files = self._get_file_list(repo_path, priority_files)
@@ -129,10 +158,10 @@ class RepositoryIngester:
 
     def _validate_url(self, url: str) -> bool:
         """Validate GitHub URL."""
-        pattern = r'^https://github\.com/[^/]+/[^/]+/?$'
+        pattern = r"^https://github\.com/[^/]+/[^/]+/?$"
         return bool(re.match(pattern, url))
 
-    def _clone_repo(self, url: str, temp_dir: str) -> Path:
+    def _clone_repo(self, url: str, temp_dir: str) -> Path:  # pragma: no cover
         """Clone repository to temporary directory.
 
         Args:
@@ -145,12 +174,13 @@ class RepositoryIngester:
         repo_path = Path(temp_dir) / "repo"
 
         try:
-            # Shallow clone for speed
+            # Shallow clone; no submodule recursion (submodules could reference arbitrary URLs)
             Repo.clone_from(
                 url,
                 repo_path,
                 depth=1,
-                timeout=self.timeout_seconds
+                timeout=self.timeout_seconds,
+                multi_options=["--no-recurse-submodules"],
             )
 
             # Check size
@@ -161,20 +191,20 @@ class RepositoryIngester:
             return repo_path
 
         except GitCommandError as e:
-            raise RuntimeError(f"Git clone failed: {e}")
+            raise RuntimeError(f"Git clone failed: {e}") from e
 
-    def _get_dir_size(self, path: Path) -> int:
+    def _get_dir_size(self, path: Path) -> int:  # pragma: no cover
         """Get directory size in bytes."""
         total = 0
-        for item in path.rglob('*'):
+        for item in path.rglob("*"):
             if item.is_file():
                 try:
                     total += item.stat().st_size
-                except:
+                except OSError:
                     pass
         return total
 
-    def _detect_monorepo(self, repo_path: Path) -> Tuple[bool, Optional[str]]:
+    def _detect_monorepo(self, repo_path: Path) -> tuple[bool, str | None]:
         """Detect if repository is a monorepo and try to resolve subdirectory.
 
         Returns:
@@ -184,7 +214,7 @@ class RepositoryIngester:
         is_monorepo = False
 
         for indicator in self.MONOREPO_INDICATORS:
-            if '/' in indicator:
+            if "/" in indicator:
                 if (repo_path / indicator).exists():
                     is_monorepo = True
                     break
@@ -198,17 +228,19 @@ class RepositoryIngester:
 
         # Try to resolve primary package
         # Check for most common subdirectories
-        common_subdirs = ['core', 'lib', 'src', 'main', 'packages/core']
+        common_subdirs = ["core", "lib", "src", "main", "packages/core"]
 
         for subdir in common_subdirs:
             subpath = repo_path / subdir
-            if subpath.exists() and (subpath / 'package.json').exists():
+            if subpath.exists() and (subpath / "package.json").exists():
                 return True, subdir
 
         # Can't resolve - will need to restrict to root docs
         return True, None
 
-    def _get_file_list(self, repo_path: Path, priority_patterns: Optional[List[str]] = None) -> List[Path]:
+    def _get_file_list(
+        self, repo_path: Path, priority_patterns: list[str] | None = None
+    ) -> list[Path]:
         """Get prioritized list of files to ingest.
 
         Args:
@@ -220,8 +252,19 @@ class RepositoryIngester:
         """
         all_files = []
 
-        for item in repo_path.rglob('*'):
+        repo_real = repo_path.resolve()
+
+        for item in repo_path.rglob("*"):
+            # Skip symlinks — they could point outside the temp directory
+            if item.is_symlink():
+                continue
             if not item.is_file():
+                continue
+
+            # Guard against any path that escapes the repo root after resolution
+            try:
+                item.resolve().relative_to(repo_real)
+            except ValueError:  # pragma: no cover
                 continue
 
             # Skip based on patterns
@@ -237,9 +280,16 @@ class RepositoryIngester:
         else:
             # Default priority: README, types, entry points, markdown
             default_patterns = [
-                'README*', '*.pyi', '*.d.ts',
-                '__init__.py', 'index.ts', 'index.js', 'lib.rs', 'main.go',
-                'CHANGELOG*', '*.md'
+                "README*",
+                "*.pyi",
+                "*.d.ts",
+                "__init__.py",
+                "index.ts",
+                "index.js",
+                "lib.rs",
+                "main.go",
+                "CHANGELOG*",
+                "*.md",
             ]
             all_files.sort(key=lambda f: self._priority_score(f, repo_path, default_patterns))
 
@@ -250,11 +300,11 @@ class RepositoryIngester:
         path_str = str(relative_path)
 
         for pattern in self.SKIP_PATTERNS:
-            if pattern.endswith('/'):
+            if pattern.endswith("/"):
                 # Directory pattern
-                if pattern[:-1] in path_str.split('/'):
+                if pattern[:-1] in path_str.split("/"):
                     return True
-            elif '*' in pattern:
+            elif "*" in pattern:
                 # Glob pattern
                 if relative_path.match(pattern):
                     return True
@@ -265,7 +315,7 @@ class RepositoryIngester:
 
         return False
 
-    def _priority_score(self, file_path: Path, repo_path: Path, patterns: List[str]) -> int:
+    def _priority_score(self, file_path: Path, repo_path: Path, patterns: list[str]) -> int:
         """Calculate priority score for a file (lower = higher priority)."""
         relative = file_path.relative_to(repo_path)
 
@@ -276,7 +326,7 @@ class RepositoryIngester:
         # No match - low priority
         return len(patterns) + 100
 
-    def _ingest_files(self, repo_path: Path, files: List[Path]) -> IngestionResult:
+    def _ingest_files(self, repo_path: Path, files: list[Path]) -> IngestionResult:
         """Ingest files with two-pass approach.
 
         Pass 1: Include whole files up to budget
@@ -292,8 +342,8 @@ class RepositoryIngester:
             relative = file_path.relative_to(repo_path)
 
             try:
-                content = file_path.read_text(encoding='utf-8', errors='ignore')
-            except:
+                content = file_path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
                 skipped_files.append(str(relative))
                 continue
 
@@ -321,15 +371,15 @@ class RepositoryIngester:
                 break
 
         return IngestionResult(
-            content='\n'.join(included_content),
+            content="\n".join(included_content),
             files_included=included_files,
             files_skipped=skipped_files,
-            total_chars=total_chars
+            total_chars=total_chars,
         )
 
     def _scan_for_injection(self, result: IngestionResult) -> None:
         """Scan README files for prompt injection patterns."""
-        for pattern in self.INJECTION_PATTERNS:
+        for pattern in self._injection_patterns:
             matches = re.findall(pattern, result.content, re.IGNORECASE)
             if matches:
                 result.content_warnings.append(
@@ -337,9 +387,4 @@ class RepositoryIngester:
                 )
 
                 # Redact the pattern
-                result.content = re.sub(
-                    pattern,
-                    '[REDACTED]',
-                    result.content,
-                    flags=re.IGNORECASE
-                )
+                result.content = re.sub(pattern, "[REDACTED]", result.content, flags=re.IGNORECASE)

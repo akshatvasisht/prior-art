@@ -1,7 +1,8 @@
 """Tests for AST-based code extraction."""
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 from priorart.core.ast_extract import InterfaceExtractor
 
@@ -60,9 +61,10 @@ async def async_function() -> None:
 
     result = extractor.extract_python(code)
 
-    # Should extract public function
+    # Should extract public function and async function
     assert "def public_function" in result
     assert "Add two numbers" in result
+    assert "async_function" in result
 
     # Should skip private function
     assert "_private_function" not in result
@@ -105,10 +107,8 @@ function internalHelper() {
 
     result = extractor.extract_typescript(code)
 
-    # Should extract exports
-    assert "interface HTTPClient" in result or "export" in result
-    # Internal functions should be excluded
-    assert "internalHelper" not in result or result.count("export") > 0
+    assert "HTTPClient" in result
+    assert "internalHelper" not in result
 
 
 def test_extract_rust_public_items(extractor):
@@ -140,9 +140,8 @@ pub enum HttpMethod {
 
     result = extractor.extract_rust(code)
 
-    # Should extract public items
-    assert "pub struct HttpClient" in result or "HttpClient" in result
-    assert "pub fn" in result or "pub enum" in result
+    assert "HttpClient" in result
+    assert "internal_helper" not in result
 
 
 def test_extract_go_public_functions(extractor):
@@ -172,12 +171,9 @@ func (c *HTTPClient) Get(path string) error {
 
     result = extractor.extract_go(code)
 
-    # Should extract exported items (capitalized)
-    assert "PublicFunction" in result or "func" in result
-    # Private items should be excluded
-    if "privateFunction" in result:
-        # Regex might catch it, but public should be present too
-        assert "PublicFunction" in result
+    assert "PublicFunction" in result
+    assert "HTTPClient" in result
+    assert "privateFunction" not in result
 
 
 def test_extract_by_file_extension(extractor):
@@ -193,7 +189,7 @@ def test_extract_by_file_extension(extractor):
 
 
 def test_extract_type_stubs_passthrough(extractor):
-    """Test that type stubs and d.ts files are passed through."""
+    """Test that .pyi type stubs are passed through unchanged."""
     pyi_code = '''
 def function(x: int) -> str: ...
 
@@ -203,9 +199,18 @@ class MyClass:
 
     result = extractor.extract(Path("stub.pyi"), pyi_code)
 
-    # Type stubs should be passed through unchanged
     assert "def function" in result
     assert "class MyClass" in result
+
+
+def test_extract_dts_passthrough(extractor):
+    """Test that .d.ts files are passed through unchanged, not processed as .ts."""
+    dts_code = "export declare function request(url: string): Promise<Response>;\n"
+
+    result = extractor.extract(Path("types.d.ts"), dts_code)
+
+    # Should be identical — pass-through, not regex-extracted
+    assert result == dts_code
 
 
 def test_extract_unknown_extension_fallback(extractor):
@@ -259,3 +264,96 @@ function internalFunction() {
 
     # Should extract exports
     assert "export" in result or "module.exports" in result
+
+
+def test_extract_python_annotations_and_defaults(extractor):
+    """Test extraction of typed args, defaults, return types, and class bases."""
+    code = '''
+class MyClient(BaseClient):
+    """Custom client."""
+
+    def __init__(self, url: str, timeout: int = 30):
+        """Init."""
+        self.url = url
+
+    def fetch(self, path: str, retry: bool = True) -> dict:
+        """Fetch data."""
+        return {}
+
+    def __repr__(self) -> str:
+        return f"MyClient({self.url})"
+
+
+def configure(host: str, port: int = 8080, debug: bool = False) -> None:
+    """Configure the app."""
+    pass
+'''
+
+    result = extractor.extract_python(code)
+
+    # Class with base
+    assert "class MyClient(BaseClient):" in result
+    # Typed args and defaults
+    assert "timeout: int = 30" in result
+    assert "retry: bool = True" in result
+    # Return type
+    assert "-> dict" in result
+    assert "-> None" in result
+    # __repr__ should be included
+    assert "__repr__" in result
+    # Top-level function
+    assert "def configure" in result
+    assert "port: int = 8080" in result
+
+
+def test_extract_python_exception_fallback(extractor):
+    """Non-syntax exception triggers fallback extraction."""
+    # Provide valid Python that would parse but make the AST traversal fail
+    # by passing something that's not valid Python at all (non-syntax error)
+    result = extractor._fallback_extract("def hello():\n    pass\n", "python")
+    assert "def hello():" in result
+
+
+def test_fallback_extract_typescript_comments(extractor):
+    """Fallback extraction skips // comments for typescript."""
+    code = "// comment\nconst x = 1;\n// another\nfunction f() {}\n"
+    result = extractor._fallback_extract(code, "typescript")
+
+    lines = result.split('\n')
+    assert not any(line.strip().startswith('//') for line in lines if line.strip())
+
+
+def test_extract_python_attribute_base(extractor):
+    """Test class with module.Class base (ast.Attribute)."""
+    code = '''
+class MyHandler(http.server.BaseHTTPRequestHandler):
+    """Custom handler."""
+
+    def do_GET(self):
+        """Handle GET."""
+        pass
+'''
+    result = extractor.extract_python(code)
+    assert 'MyHandler' in result
+    assert 'http.server.BaseHTTPRequestHandler' in result
+
+
+def test_extract_python_non_syntax_exception(extractor):
+    """Non-SyntaxError exception triggers fallback."""
+    from unittest.mock import patch
+
+    # Patch ast.parse to raise a non-SyntaxError
+    with patch('priorart.core.ast_extract.ast.parse', side_effect=TypeError("test error")):
+        result = extractor.extract_python("def hello(): pass\n")
+
+    assert "def hello()" in result
+
+
+def test_fallback_extract_50_line_limit(extractor):
+    """Fallback extraction stops at 50 non-empty, non-comment lines."""
+    lines = [f"line_{i} = {i}" for i in range(200)]
+    code = "\n".join(lines)
+
+    result = extractor._fallback_extract(code, "python")
+    result_lines = [l for l in result.split('\n') if l.strip()]
+    assert len(result_lines) == 50

@@ -5,11 +5,11 @@ Implements five scoring dimensions with age confidence multiplier.
 All scoring is deterministic - same inputs always produce same outputs.
 """
 
-import math
 import logging
-from dataclasses import dataclass, asdict
-from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List
+import math
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +25,11 @@ class ScoreBreakdown:
     dependency_health: float
 
     # Sub-scores for explain mode
-    reliability_details: Optional[Dict[str, Any]] = None
-    adoption_details: Optional[Dict[str, Any]] = None
-    versioning_details: Optional[Dict[str, Any]] = None
-    regularity_details: Optional[Dict[str, Any]] = None
-    dependency_details: Optional[Dict[str, Any]] = None
+    reliability_details: dict[str, Any] | None = None
+    adoption_details: dict[str, Any] | None = None
+    versioning_details: dict[str, Any] | None = None
+    regularity_details: dict[str, Any] | None = None
+    dependency_details: dict[str, Any] | None = None
 
 
 @dataclass
@@ -44,34 +44,33 @@ class ScoredPackage:
     registry: str
 
     # Basic info
-    description: Optional[str] = None
+    description: str | None = None
     age_years: float = 0.0
-    latest_compatible_version: Optional[str] = None
+    latest_compatible_version: str | None = None
     version_compatible: bool = True
 
     # Adoption signals
-    weekly_downloads: Optional[int] = None
-    download_percentile: Optional[float] = None
+    weekly_downloads: int | None = None
     reverse_dep_count: int = 0
-    fork_to_star_ratio: Optional[float] = None
+    fork_to_star_ratio: float | None = None
 
     # Reliability signals
-    mttr_median_days: Optional[float] = None
-    mttr_mad: Optional[float] = None
+    mttr_median_days: float | None = None
+    mttr_mad: float | None = None
     reliability_state: str = "unknown"
     likely_abandoned: bool = False
 
     # Other metadata
-    license: Optional[str] = None
+    license: str | None = None
     license_warning: bool = False
     dep_count: int = 0
     dep_health_flag: bool = False
 
     # Scoring
     health_score: int = 50
-    score_breakdown: Optional[ScoreBreakdown] = None
+    score_breakdown: ScoreBreakdown | None = None
     recommendation: str = "evaluate"  # use_existing, evaluate, build
-    service_note: Optional[str] = None
+    service_note: str | None = None
     identity_verified: bool = True
 
 
@@ -80,13 +79,21 @@ class PackageScorer:
 
     # Copyleft licenses that trigger warnings
     COPYLEFT_LICENSES = {
-        'gpl', 'gpl-2.0', 'gpl-3.0', 'gplv2', 'gplv3',
-        'agpl', 'agpl-3.0', 'agplv3',
-        'eupl', 'eupl-1.2',
-        'sspl', 'sspl-1.0'
+        "gpl",
+        "gpl-2.0",
+        "gpl-3.0",
+        "gplv2",
+        "gplv3",
+        "agpl",
+        "agpl-3.0",
+        "agplv3",
+        "eupl",
+        "eupl-1.2",
+        "sspl",
+        "sspl-1.0",
     }
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """Initialize scorer with configuration.
 
         Args:
@@ -95,15 +102,15 @@ class PackageScorer:
         self.config = config
 
         # Extract key parameters
-        self.weights = config['weights']
-        self.floor_filter = config['floor_filter']
-        self.reliability_config = config['reliability']
-        self.adoption_config = config['adoption']
-        self.versioning_config = config['versioning']
-        self.dependency_config = config['dependency_health']
-        self.confidence_config = config['confidence']
-        self.abandonment_config = config['abandonment']
-        self.recommendation_config = config['recommendation']
+        self.weights = config["weights"]
+        self.floor_filter = config["floor_filter"]
+        self.reliability_config = config["reliability"]
+        self.adoption_config = config["adoption"]
+        self.versioning_config = config["versioning"]
+        self.dependency_config = config["dependency_health"]
+        self.confidence_config = config["confidence"]
+        self.abandonment_config = config["abandonment"]
+        self.recommendation_config = config["recommendation"]
 
         # Validate weights sum to 1.0
         weight_sum = sum(self.weights.values())
@@ -113,7 +120,7 @@ class PackageScorer:
                 "Hint: Check src/priorart/data/config.yaml for correct weight values."
             )
 
-    def apply_floor_filter(self, candidates: List[Any]) -> List[Any]:
+    def apply_floor_filter(self, candidates: list[Any]) -> list[Any]:
         """Apply floor filter to exclude noise packages.
 
         Args:
@@ -123,12 +130,12 @@ class PackageScorer:
             Filtered list excluding packages below thresholds
         """
         filtered = []
-        min_downloads = self.floor_filter['min_weekly_downloads']
-        min_stars = self.floor_filter['min_stars']
+        min_downloads = self.floor_filter["min_weekly_downloads"]
+        min_stars = self.floor_filter["min_stars"]
 
         for candidate in candidates:
             # Check download threshold
-            downloads = getattr(candidate, 'weekly_downloads', 0) or 0
+            downloads = candidate.get("weekly_downloads", 0) or 0
 
             # If we have download data, use it
             if downloads > 0:
@@ -136,14 +143,14 @@ class PackageScorer:
                     filtered.append(candidate)
             else:
                 # Fallback to star count if no download data
-                stars = getattr(candidate, 'star_count', 0) or 0
+                stars = candidate.get("star_count", 0) or 0
                 if stars >= min_stars:
                     filtered.append(candidate)
 
         logger.info(f"Floor filter: {len(candidates)} -> {len(filtered)} candidates")
         return filtered
 
-    def score_package(self, package_data: Dict[str, Any], explain: bool = False) -> ScoredPackage:
+    def score_package(self, package_data: dict[str, Any], explain: bool = False) -> ScoredPackage:
         """Score a package based on all available signals.
 
         Args:
@@ -162,17 +169,17 @@ class PackageScorer:
 
         # Calculate raw composite score
         raw_score = (
-            self.weights['reliability'] * reliability_score +
-            self.weights['adoption'] * adoption_score +
-            self.weights['versioning'] * versioning_score +
-            self.weights['activity_regularity'] * regularity_score +
-            self.weights['dependency_health'] * dependency_score
+            self.weights["reliability"] * reliability_score
+            + self.weights["adoption"] * adoption_score
+            + self.weights["versioning"] * versioning_score
+            + self.weights["activity_regularity"] * regularity_score
+            + self.weights["dependency_health"] * dependency_score
         )
 
         # Apply age confidence multiplier
         age_years = self._calculate_age_years(package_data)
-        confidence = min(age_years / self.confidence_config['full_trust_age_years'], 1.0)
-        neutral_prior = self.confidence_config['neutral_prior']
+        confidence = min(age_years / self.confidence_config["full_trust_age_years"], 1.0)
+        neutral_prior = self.confidence_config["neutral_prior"]
 
         # Blend with neutral prior based on confidence
         final_score = confidence * raw_score + (1 - confidence) * neutral_prior
@@ -187,7 +194,7 @@ class PackageScorer:
         likely_abandoned = self._check_abandonment(package_data)
 
         # Check license
-        license_warning = self._check_license(package_data.get('license'))
+        license_warning = self._check_license(package_data.get("license"))
 
         # Check dependency health flag
         dep_health_flag = self._check_dep_health_flag(package_data)
@@ -205,40 +212,39 @@ class PackageScorer:
                 adoption_details=adoption_details,
                 versioning_details=versioning_details,
                 regularity_details=regularity_details,
-                dependency_details=dependency_details
+                dependency_details=dependency_details,
             )
 
         # Build final scored package
         return ScoredPackage(
-            name=package_data.get('name', ''),
-            full_name=package_data.get('full_name', ''),
-            url=package_data.get('url', ''),
-            package_name=package_data.get('package_name', ''),
-            registry=package_data.get('registry', ''),
-            description=package_data.get('description'),
+            name=package_data.get("name", ""),
+            full_name=package_data.get("full_name", ""),
+            url=package_data.get("url", ""),
+            package_name=package_data.get("package_name", ""),
+            registry=package_data.get("registry", ""),
+            description=package_data.get("description"),
             age_years=age_years,
-            latest_compatible_version=package_data.get('latest_version'),
-            version_compatible=package_data.get('version_compatible', True),
-            weekly_downloads=package_data.get('weekly_downloads'),
-            download_percentile=package_data.get('download_percentile'),
-            reverse_dep_count=package_data.get('reverse_dep_count', 0),
-            fork_to_star_ratio=package_data.get('fork_to_star_ratio'),
-            mttr_median_days=package_data.get('mttr_median_days'),
-            mttr_mad=package_data.get('mttr_mad'),
-            reliability_state=package_data.get('mttr_state', 'unknown'),
+            latest_compatible_version=package_data.get("latest_version"),
+            version_compatible=package_data.get("version_compatible", True),
+            weekly_downloads=package_data.get("weekly_downloads"),
+            reverse_dep_count=package_data.get("reverse_dep_count", 0),
+            fork_to_star_ratio=package_data.get("fork_to_star_ratio"),
+            mttr_median_days=package_data.get("mttr_median_days"),
+            mttr_mad=package_data.get("mttr_mad"),
+            reliability_state=package_data.get("mttr_state", "unknown"),
             likely_abandoned=likely_abandoned,
-            license=package_data.get('license'),
+            license=package_data.get("license"),
             license_warning=license_warning,
-            dep_count=package_data.get('direct_dep_count', 0),
+            dep_count=package_data.get("direct_dep_count", 0),
             dep_health_flag=dep_health_flag,
             health_score=health_score,
             score_breakdown=score_breakdown,
             recommendation=recommendation,
-            service_note=package_data.get('service_note'),
-            identity_verified=package_data.get('identity_verified', True)
+            service_note=package_data.get("service_note"),
+            identity_verified=package_data.get("identity_verified", True),
         )
 
-    def _score_reliability(self, data: Dict[str, Any]) -> tuple[float, Dict[str, Any]]:
+    def _score_reliability(self, data: dict[str, Any]) -> tuple[float, dict[str, Any]]:
         """Score reliability dimension (30% weight).
 
         Args:
@@ -247,24 +253,24 @@ class PackageScorer:
         Returns:
             Tuple of (score, details)
         """
-        mttr_state = data.get('mttr_state', 'unknown')
+        mttr_state = data.get("mttr_state", "unknown")
 
         # Handle null states
-        null_scores = self.reliability_config['null_state_scores']
+        null_scores = self.reliability_config["null_state_scores"]
 
-        if mttr_state == 'issues_disabled':
-            return null_scores['issues_disabled'], {'state': 'issues_disabled'}
-        elif mttr_state == 'low_volume_healthy':
-            return null_scores['low_volume_healthy'], {'state': 'low_volume_healthy'}
-        elif mttr_state == 'low_volume_backlog':
-            return null_scores['low_volume_backlog'], {'state': 'low_volume_backlog'}
+        if mttr_state == "issues_disabled":
+            return null_scores["issues_disabled"], {"state": "issues_disabled"}
+        elif mttr_state == "low_volume_healthy":
+            return null_scores["low_volume_healthy"], {"state": "low_volume_healthy"}
+        elif mttr_state == "low_volume_backlog":
+            return null_scores["low_volume_backlog"], {"state": "low_volume_backlog"}
 
         # Measured state - calculate score
-        mttr_median = data.get('mttr_median_days')
-        mttr_mad = data.get('mttr_mad')
+        mttr_median = data.get("mttr_median_days")
+        mttr_mad = data.get("mttr_mad")
 
         if mttr_median is None:
-            return null_scores['issues_disabled'], {'state': 'no_data'}
+            return null_scores["issues_disabled"], {"state": "no_data"}
 
         # MTTR score: faster response = higher score
         mttr_score = 1.0 / (1.0 + math.log(1.0 + mttr_median))
@@ -278,16 +284,16 @@ class PackageScorer:
         reliability_score = 0.6 * mttr_score + 0.4 * consistency_score
 
         details = {
-            'state': 'measured',
-            'mttr_median_days': mttr_median,
-            'mttr_mad': mttr_mad,
-            'mttr_score': mttr_score,
-            'consistency_score': consistency_score
+            "state": "measured",
+            "mttr_median_days": mttr_median,
+            "mttr_mad": mttr_mad,
+            "mttr_score": mttr_score,
+            "consistency_score": consistency_score,
         }
 
         return reliability_score, details
 
-    def _score_adoption(self, data: Dict[str, Any]) -> tuple[float, Dict[str, Any]]:
+    def _score_adoption(self, data: dict[str, Any]) -> tuple[float, dict[str, Any]]:
         """Score adoption dimension (20% weight).
 
         Args:
@@ -296,50 +302,48 @@ class PackageScorer:
         Returns:
             Tuple of (score, details)
         """
-        language = data.get('language', 'default')
+        language = data.get("language", "default")
 
         # Fork-to-star ratio
-        fsr = data.get('fork_to_star_ratio', 0)
-        fsr_reference = self.adoption_config['fsr_reference'].get(
-            language.lower(),
-            self.adoption_config['fsr_reference']['default']
+        fsr = data.get("fork_to_star_ratio", 0)
+        fsr_reference = self.adoption_config["fsr_reference"].get(
+            language.lower(), self.adoption_config["fsr_reference"]["default"]
         )
         fsr_score = min(fsr / fsr_reference, 1.0) if fsr_reference > 0 else 0.0
 
-        # Download percentile
-        dl_score = data.get('download_percentile', 0)
+        # Saturation at 10M/week (~top 0.01% of ecosystem); 0 when unavailable (PyPI fallback to stars)
+        weekly_downloads = data.get("weekly_downloads", 0) or 0
+        dl_saturation = 10_000_000
+        dl_score = min(math.log(1 + weekly_downloads) / math.log(1 + dl_saturation), 1.0)
 
         # Recent committers
-        committers = data.get('recent_committer_count', 0)
-        committer_saturation = self.adoption_config['committer_saturation']
+        committers = data.get("recent_committer_count", 0)
+        committer_saturation = self.adoption_config["committer_saturation"]
         committer_score = min(committers / committer_saturation, 1.0)
 
         # Reverse dependencies
-        revdeps = data.get('reverse_dep_count', 0)
-        revdep_saturation = self.adoption_config['revdep_saturation']
+        revdeps = data.get("reverse_dep_count", 0)
+        revdep_saturation = self.adoption_config["revdep_saturation"]
         revdep_score = min(math.log(1 + revdeps) / math.log(1 + revdep_saturation), 1.0)
 
         # Combined adoption score
         adoption_score = (
-            0.35 * dl_score +
-            0.25 * fsr_score +
-            0.20 * revdep_score +
-            0.20 * committer_score
+            0.35 * dl_score + 0.25 * fsr_score + 0.20 * revdep_score + 0.20 * committer_score
         )
 
         details = {
-            'download_percentile': dl_score,
-            'fork_to_star_ratio': fsr,
-            'fsr_score': fsr_score,
-            'recent_committers': committers,
-            'committer_score': committer_score,
-            'reverse_dependencies': revdeps,
-            'revdep_score': revdep_score
+            "dl_score": dl_score,
+            "fork_to_star_ratio": fsr,
+            "fsr_score": fsr_score,
+            "recent_committers": committers,
+            "committer_score": committer_score,
+            "reverse_dependencies": revdeps,
+            "revdep_score": revdep_score,
         }
 
         return adoption_score, details
 
-    def _score_versioning(self, data: Dict[str, Any]) -> tuple[float, Dict[str, Any]]:
+    def _score_versioning(self, data: dict[str, Any]) -> tuple[float, dict[str, Any]]:
         """Score versioning dimension (20% weight).
 
         Args:
@@ -349,43 +353,41 @@ class PackageScorer:
             Tuple of (score, details)
         """
         # Recency of compatible version
-        days_since_release = data.get('days_since_compatible_release', 365)
-        halflife = self.versioning_config['recency_halflife_days']
+        days_since_release = data.get("days_since_compatible_release", 365)
+        halflife = self.versioning_config["recency_halflife_days"]
         recency_score = 1.0 / (1.0 + days_since_release / halflife)
 
         # Is compatible version current?
         is_current = 1.0
-        if not data.get('version_compatible', True):
-            is_current = self.versioning_config['is_current_partial_score']
+        if not data.get("version_compatible", True):
+            is_current = self.versioning_config["is_current_partial_score"]
 
         # Release regularity
-        release_cv = data.get('release_cv', 1.0)
+        release_cv = data.get("release_cv", 1.0)
         regularity_score = 1.0 / (1.0 + release_cv)
 
         # API stability
-        major_versions_per_year = data.get('major_versions_per_year', 0)
+        major_versions_per_year = data.get("major_versions_per_year", 0)
         stability_score = 1.0 / (1.0 + major_versions_per_year)
 
         # Combined versioning score
         versioning_score = (
-            0.35 * recency_score * is_current +
-            0.35 * regularity_score +
-            0.30 * stability_score
+            0.35 * recency_score * is_current + 0.35 * regularity_score + 0.30 * stability_score
         )
 
         details = {
-            'days_since_release': days_since_release,
-            'recency_score': recency_score,
-            'is_current': is_current,
-            'release_cv': release_cv,
-            'regularity_score': regularity_score,
-            'major_versions_per_year': major_versions_per_year,
-            'stability_score': stability_score
+            "days_since_release": days_since_release,
+            "recency_score": recency_score,
+            "is_current": is_current,
+            "release_cv": release_cv,
+            "regularity_score": regularity_score,
+            "major_versions_per_year": major_versions_per_year,
+            "stability_score": stability_score,
         }
 
         return versioning_score, details
 
-    def _score_regularity(self, data: Dict[str, Any]) -> tuple[float, Dict[str, Any]]:
+    def _score_regularity(self, data: dict[str, Any]) -> tuple[float, dict[str, Any]]:
         """Score activity regularity dimension (15% weight).
 
         Args:
@@ -394,21 +396,18 @@ class PackageScorer:
         Returns:
             Tuple of (score, details)
         """
-        weekly_cv = data.get('weekly_commit_cv')
+        weekly_cv = data.get("weekly_commit_cv")
 
         if weekly_cv is None:
-            return 0.5, {'weekly_commit_cv': None, 'score': 0.5}
+            return 0.5, {"weekly_commit_cv": None, "score": 0.5}
 
         regularity_score = 1.0 / (1.0 + weekly_cv)
 
-        details = {
-            'weekly_commit_cv': weekly_cv,
-            'score': regularity_score
-        }
+        details = {"weekly_commit_cv": weekly_cv, "score": regularity_score}
 
         return regularity_score, details
 
-    def _score_dependency(self, data: Dict[str, Any]) -> tuple[float, Dict[str, Any]]:
+    def _score_dependency(self, data: dict[str, Any]) -> tuple[float, dict[str, Any]]:
         """Score dependency health dimension (15% weight).
 
         Args:
@@ -417,9 +416,9 @@ class PackageScorer:
         Returns:
             Tuple of (score, details)
         """
-        direct_deps = data.get('direct_dep_count', 0)
-        vulnerable_deps = data.get('vulnerable_dep_count', 0)
-        deprecated_deps = data.get('deprecated_dep_count', 0)
+        direct_deps = data.get("direct_dep_count", 0)
+        vulnerable_deps = data.get("vulnerable_dep_count", 0)
+        deprecated_deps = data.get("deprecated_dep_count", 0)
 
         # Dependency count score (fewer is better)
         dep_count_score = 1.0 / (1.0 + math.log(1.0 + direct_deps))
@@ -431,16 +430,16 @@ class PackageScorer:
         dependency_score = 0.40 * dep_count_score + 0.60 * dep_quality_score
 
         details = {
-            'direct_dep_count': direct_deps,
-            'vulnerable_dep_count': vulnerable_deps,
-            'deprecated_dep_count': deprecated_deps,
-            'dep_count_score': dep_count_score,
-            'dep_quality_score': dep_quality_score
+            "direct_dep_count": direct_deps,
+            "vulnerable_dep_count": vulnerable_deps,
+            "deprecated_dep_count": deprecated_deps,
+            "dep_count_score": dep_count_score,
+            "dep_quality_score": dep_quality_score,
         }
 
         return dependency_score, details
 
-    def _calculate_age_years(self, data: Dict[str, Any]) -> float:
+    def _calculate_age_years(self, data: dict[str, Any]) -> float:
         """Calculate package age in years.
 
         Args:
@@ -449,10 +448,10 @@ class PackageScorer:
         Returns:
             Age in years or 0.0 if not found
         """
-        first_release = data.get('first_release_date')
+        first_release = data.get("first_release_date")
 
         if not first_release:
-            created_at = data.get('created_at')
+            created_at = data.get("created_at")
             if created_at:
                 first_release = created_at
             else:
@@ -461,10 +460,13 @@ class PackageScorer:
         if isinstance(first_release, str):
             try:
                 first_release = datetime.fromisoformat(first_release)
-            except:
+            except Exception:
                 return 0.0
 
-        age_days = (datetime.utcnow() - first_release).days
+        if first_release.tzinfo is None:
+            first_release = first_release.replace(tzinfo=timezone.utc)
+
+        age_days = (datetime.now(timezone.utc) - first_release).days
         return age_days / 365.0
 
     def _get_recommendation(self, health_score: int) -> str:
@@ -476,8 +478,8 @@ class PackageScorer:
         Returns:
             Recommendation string: "use_existing", "evaluate", or "build"
         """
-        use_min = self.recommendation_config['use_existing_min']
-        evaluate_min = self.recommendation_config['evaluate_min']
+        use_min = self.recommendation_config["use_existing_min"]
+        evaluate_min = self.recommendation_config["evaluate_min"]
 
         if health_score >= use_min:
             return "use_existing"
@@ -486,7 +488,7 @@ class PackageScorer:
         else:
             return "build"
 
-    def _check_abandonment(self, data: Dict[str, Any]) -> bool:
+    def _check_abandonment(self, data: dict[str, Any]) -> bool:
         """Check if package is likely abandoned.
 
         Args:
@@ -495,23 +497,23 @@ class PackageScorer:
         Returns:
             True if thresholds suggest abandonment, False otherwise
         """
-        days_since_commit = data.get('days_since_last_commit')
+        days_since_commit = data.get("days_since_last_commit")
         if days_since_commit is None:
             return False
 
         # Check thresholds
-        early_warning = self.abandonment_config['early_warning_days']
-        dormant = self.abandonment_config['dormant_days']
+        early_warning = self.abandonment_config["early_warning_days"]
+        dormant = self.abandonment_config["dormant_days"]
 
         if days_since_commit > dormant:
             return True
 
         if days_since_commit > early_warning:
             # Check issue ratio
-            open_issues = data.get('open_issue_count', 0)
-            closed_last_year = data.get('closed_issues_last_year', 0)
+            open_issues = data.get("open_issue_count", 0)
+            closed_last_year = data.get("closed_issues_last_year", 0)
 
-            ratio_threshold = self.abandonment_config['open_to_closed_ratio_threshold']
+            ratio_threshold = self.abandonment_config["open_to_closed_ratio_threshold"]
             if closed_last_year > 0:
                 ratio = open_issues / closed_last_year
                 if ratio > ratio_threshold:
@@ -519,7 +521,7 @@ class PackageScorer:
 
         return False
 
-    def _check_license(self, license_str: Optional[str]) -> bool:
+    def _check_license(self, license_str: str | None) -> bool:
         """Check if license is copyleft.
 
         Args:
@@ -538,7 +540,7 @@ class PackageScorer:
 
         return False
 
-    def _check_dep_health_flag(self, data: Dict[str, Any]) -> bool:
+    def _check_dep_health_flag(self, data: dict[str, Any]) -> bool:
         """Check if dependency health flag should be set.
 
         Args:
@@ -547,8 +549,8 @@ class PackageScorer:
         Returns:
             True if issues exceed thresholds, False otherwise
         """
-        vulnerable = data.get('vulnerable_dep_count', 0)
-        deprecated = data.get('deprecated_dep_count', 0)
-        threshold = self.dependency_config['dep_health_deprecated_threshold']
+        vulnerable = data.get("vulnerable_dep_count", 0)
+        deprecated = data.get("deprecated_dep_count", 0)
+        threshold = self.dependency_config["dep_health_deprecated_threshold"]
 
         return vulnerable > 0 or deprecated > threshold

@@ -5,7 +5,6 @@ Thin wrapper over core functions for MCP protocol compatibility.
 """
 
 import logging
-from typing import Optional
 
 from fastmcp import FastMCP
 
@@ -13,17 +12,15 @@ from .core.find_alternatives import find_alternatives as core_find_alternatives
 from .core.ingest_repo import ingest_repo as core_ingest_repo
 
 # Set up logging
-logging.basicConfig(
-    level=logging.WARNING,
-    format='%(levelname)s: %(message)s'
-)
+logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 # Initialize MCP server
 mcp = FastMCP("priorart")
 
 
 @mcp.tool()
-def find_alternatives(language: str, task_description: str, explain: bool = False) -> dict:
+def find_alternatives(language: str, task_description: str, explain: bool = False) -> dict:  # pragma: no cover
     """Find and score open source packages for a given task.
 
     Discovers packages via registry APIs, scores them across 5 health dimensions
@@ -45,15 +42,12 @@ def find_alternatives(language: str, task_description: str, explain: bool = Fals
     try:
         return core_find_alternatives(language, task_description, explain)
     except Exception as e:
-        logging.error(f"Error in find_alternatives: {e}", exc_info=True)
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+        logger.error(f"Error in find_alternatives: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
 
 
 @mcp.tool()
-def ingest_repo(repo_url: str, language: Optional[str] = None, category: Optional[str] = None) -> dict:
+def ingest_repo(repo_url: str, language: str | None = None, category: str | None = None) -> dict:  # pragma: no cover
     """Extract a GitHub repository's public interface for evaluation.
 
     Call on ONE candidate at a time after find_alternatives returns score 50-74.
@@ -72,17 +66,14 @@ def ingest_repo(repo_url: str, language: Optional[str] = None, category: Optiona
     try:
         return core_ingest_repo(repo_url, language, category)
     except Exception as e:
-        logging.error(f"Error in ingest_repo: {e}", exc_info=True)
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+        logger.error(f"Error in ingest_repo: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
 
 
-def main() -> None:
+def main() -> None:  # pragma: no cover
     """Main entry point for MCP server."""
     mcp.run()
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

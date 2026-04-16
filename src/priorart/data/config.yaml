@@ -21,11 +21,10 @@ weights:
   dependency_health: 0.15              # Transitive dependency quality
 
 # Reliability dimension parameters
+# Note: issues_sufficient_min_count is enforced in github_client.py (hardcoded 10)
+# Note: open_to_closed_ratio_threshold is used in the abandonment block below, not here
+# Note: stale-days thresholds are enforced via abandonment config below
 reliability:
-  issues_sufficient_min_count: 10      # Minimum for stable median/MAD calculation
-  open_to_closed_ratio_threshold: 2.0  # CHAOSS/GrimoireLab: sustainable vs growing backlog
-  last_close_stale_days_warning: 365   # Coelho et al. 2017: 12-month early warning
-  last_close_stale_days_dormant: 540   # Coelho et al. 2017: 18-month dormancy threshold
   null_state_scores:
     issues_disabled: 0.50               # Neutral prior - no signal
     low_volume_healthy: 0.65            # Elevated neutral - positive partial signal
@@ -77,7 +76,8 @@ github:
   issues_max_pages: 2                   # Hard cap: 200 issues (sufficient for median/MAD)
   commits_lookback_weeks: 104           # Popoola et al. 2025: 2-year regularity window
 
-# Cache freshness windows (days)
+# Cache freshness windows (days) — used by is_signal_group_stale()
+# TODO: wire into _collect_package_signals for per-group staleness checks
 cache_freshness:
   version_release: 2                    # Releases change frequently
   weekly_downloads: 7                   # Weekly data refreshes weekly
@@ -89,15 +89,16 @@ cache_freshness:
 
 # Security settings
 security:
-  allowed_repo_hosts:                   # Only these GitHub URLs are accepted
-    - "github.com"
-  prompt_injection_patterns:            # Patterns to scan for in READMEs
+  # allowed_repo_hosts: URL validation is enforced by validate_github_url() regex in utils.py
+  prompt_injection_patterns:            # Literal strings to scan for in READMEs (re.escape applied on load)
     - "IGNORE PREVIOUS"
     - "SYSTEM:"
     - "[INST]"
     - "<<<OVERRIDE"
     - "###INSTRUCTION"
-  max_readme_size_bytes: 1048576        # 1MB max for README files
+    - "DISREGARD ALL"
+    - "NEW INSTRUCTIONS"
+  # max_readme_size_bytes: not currently enforced; ingestion uses char_budget instead
 
 # Taxonomy mapping
 taxonomy:

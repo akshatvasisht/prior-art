@@ -5,9 +5,8 @@ Extracts public interfaces from source files to fit within character budget.
 """
 
 import ast
-import re
 import logging
-from typing import List, Optional, Tuple
+import re
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -29,24 +28,21 @@ class InterfaceExtractor:
             tree = ast.parse(content)
             lines = []
 
-            for node in ast.walk(tree):
+            for node in ast.iter_child_nodes(tree):
                 if isinstance(node, ast.ClassDef):
-                    # Extract class definition
                     lines.append(self._extract_class(node))
-
-                elif isinstance(node, ast.FunctionDef):
-                    # Skip private functions
-                    if not node.name.startswith('_'):
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if not node.name.startswith("_"):
                         lines.append(self._extract_function(node))
 
-            return '\n\n'.join(lines)
+            return "\n\n".join(lines)
 
         except SyntaxError as e:
             logger.warning(f"Python syntax error: {e}")
-            return self._fallback_extract(content, 'python')
+            return self._fallback_extract(content, "python")
         except Exception as e:
             logger.warning(f"Python extraction error: {e}")
-            return self._fallback_extract(content, 'python')
+            return self._fallback_extract(content, "python")
 
     def _extract_class(self, node: ast.ClassDef) -> str:
         """Extract class definition with methods."""
@@ -70,13 +66,17 @@ class InterfaceExtractor:
 
         # Public methods
         for item in node.body:
-            if isinstance(item, ast.FunctionDef):
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 # Skip private methods
-                if not item.name.startswith('_') or item.name in ['__init__', '__str__', '__repr__']:
+                if not item.name.startswith("_") or item.name in [
+                    "__init__",
+                    "__str__",
+                    "__repr__",
+                ]:
                     method_str = self._extract_method(item)
                     lines.append(method_str)
 
-        return '\n'.join(lines)
+        return "\n".join(lines)
 
     def _extract_function(self, node: ast.FunctionDef) -> str:
         """Extract function signature and docstring."""
@@ -87,7 +87,7 @@ class InterfaceExtractor:
             if arg.annotation:
                 try:
                     arg_str += f": {ast.unparse(arg.annotation)}"
-                except:
+                except Exception:  # pragma: no cover
                     pass
             args.append(arg_str)
 
@@ -97,7 +97,7 @@ class InterfaceExtractor:
             for i, default in enumerate(defaults, len(args) - len(defaults)):
                 try:
                     args[i] += f" = {ast.unparse(default)}"
-                except:
+                except Exception:  # pragma: no cover
                     args[i] += " = ..."
 
         # Return type annotation
@@ -105,7 +105,7 @@ class InterfaceExtractor:
         if node.returns:
             try:
                 returns = f" -> {ast.unparse(node.returns)}"
-            except:
+            except Exception:  # pragma: no cover
                 pass
 
         signature = f"def {node.name}({', '.join(args)}){returns}:"
@@ -113,7 +113,7 @@ class InterfaceExtractor:
         # Get docstring
         docstring = ast.get_docstring(node)
         if docstring:
-            return f"{signature}\n    \"\"\"{docstring}\"\"\"\n    ..."
+            return f'{signature}\n    """{docstring}"""\n    ...'
         else:
             return f"{signature}\n    ..."
 
@@ -121,22 +121,22 @@ class InterfaceExtractor:
         """Extract method signature (indented for class)."""
         func_str = self._extract_function(node)
         # Indent each line
-        lines = func_str.split('\n')
-        return '\n'.join('    ' + line if line else '' for line in lines)
+        lines = func_str.split("\n")
+        return "\n".join("    " + line if line else "" for line in lines)
 
     def extract_typescript(self, content: str) -> str:
         """Extract TypeScript public interface using regex."""
         patterns = [
             # Export functions
-            r'export\s+(?:async\s+)?function\s+\w+\s*\([^)]*\)[^{]*',
+            r"export\s+(?:async\s+)?function\s+\w+\s*\([^)]*\)[^{]*",
             # Export classes
-            r'export\s+class\s+\w+(?:\s+extends\s+\w+)?(?:\s+implements\s+[\w\s,]+)?\s*\{[^}]*(?:constructor|public)[^}]*\}',
+            r"export\s+class\s+\w+(?:\s+extends\s+\w+)?(?:\s+implements\s+[\w\s,]+)?\s*\{[^}]*(?:constructor|public)[^}]*\}",
             # Export interfaces
-            r'export\s+interface\s+\w+\s*\{[^}]*\}',
+            r"export\s+interface\s+\w+\s*\{[^}]*\}",
             # Export types
-            r'export\s+type\s+\w+\s*=[^;]+;',
+            r"export\s+type\s+\w+\s*=[^;]+;",
             # Export const
-            r'export\s+const\s+\w+\s*:\s*[^=]+=',
+            r"export\s+const\s+\w+\s*:\s*[^=]+=",
         ]
 
         extracted = []
@@ -144,21 +144,23 @@ class InterfaceExtractor:
             matches = re.findall(pattern, content, re.MULTILINE | re.DOTALL)
             extracted.extend(matches[:10])  # Limit matches per pattern
 
-        return '\n\n'.join(extracted) if extracted else self._fallback_extract(content, 'typescript')
+        return (
+            "\n\n".join(extracted) if extracted else self._fallback_extract(content, "typescript")
+        )
 
     def extract_javascript(self, content: str) -> str:
         """Extract JavaScript public interface using regex."""
         patterns = [
             # Export functions (ES6)
-            r'export\s+(?:async\s+)?function\s+\w+\s*\([^)]*\)[^{]*',
+            r"export\s+(?:async\s+)?function\s+\w+\s*\([^)]*\)[^{]*",
             # Export arrow functions
-            r'export\s+const\s+\w+\s*=\s*(?:async\s*)?\([^)]*\)\s*=>[^;]+;',
+            r"export\s+const\s+\w+\s*=\s*(?:async\s*)?\([^)]*\)\s*=>[^;]+;",
             # Export classes
-            r'export\s+class\s+\w+(?:\s+extends\s+\w+)?\s*\{[^}]*constructor[^}]*\}',
+            r"export\s+class\s+\w+(?:\s+extends\s+\w+)?\s*\{[^}]*constructor[^}]*\}",
             # Module exports
-            r'module\.exports\s*=\s*\{[^}]+\}',
+            r"module\.exports\s*=\s*\{[^}]+\}",
             # Named exports
-            r'exports\.\w+\s*=\s*(?:function|class|\{)[^;]+;',
+            r"exports\.\w+\s*=\s*(?:function|class|\{)[^;]+;",
         ]
 
         extracted = []
@@ -166,23 +168,25 @@ class InterfaceExtractor:
             matches = re.findall(pattern, content, re.MULTILINE | re.DOTALL)
             extracted.extend(matches[:10])
 
-        return '\n\n'.join(extracted) if extracted else self._fallback_extract(content, 'javascript')
+        return (
+            "\n\n".join(extracted) if extracted else self._fallback_extract(content, "javascript")
+        )
 
     def extract_rust(self, content: str) -> str:
         """Extract Rust public interface using regex."""
         patterns = [
             # Public functions
-            r'pub\s+(?:async\s+)?fn\s+\w+[^{]*\{',
+            r"pub\s+(?:async\s+)?fn\s+\w+[^{]*\{",
             # Public structs
-            r'pub\s+struct\s+\w+(?:<[^>]+>)?\s*(?:\{[^}]*\}|\([^)]*\)|;)',
+            r"pub\s+struct\s+\w+(?:<[^>]+>)?\s*(?:\{[^}]*\}|\([^)]*\)|;)",
             # Public enums
-            r'pub\s+enum\s+\w+(?:<[^>]+>)?\s*\{[^}]*\}',
+            r"pub\s+enum\s+\w+(?:<[^>]+>)?\s*\{[^}]*\}",
             # Public traits
-            r'pub\s+trait\s+\w+(?:<[^>]+>)?\s*\{[^}]*\}',
+            r"pub\s+trait\s+\w+(?:<[^>]+>)?\s*\{[^}]*\}",
             # Public type aliases
-            r'pub\s+type\s+\w+\s*=\s*[^;]+;',
+            r"pub\s+type\s+\w+\s*=\s*[^;]+;",
             # Public constants
-            r'pub\s+const\s+\w+:\s*[^=]+=\s*[^;]+;',
+            r"pub\s+const\s+\w+:\s*[^=]+=\s*[^;]+;",
         ]
 
         extracted = []
@@ -192,26 +196,26 @@ class InterfaceExtractor:
             cleaned = []
             for match in matches[:10]:
                 # For functions, remove body
-                if 'fn ' in match:
-                    match = match.split('{')[0] + '{ ... }'
+                if "fn " in match:
+                    match = match.split("{")[0] + "{ ... }"
                 cleaned.append(match)
             extracted.extend(cleaned)
 
-        return '\n\n'.join(extracted) if extracted else self._fallback_extract(content, 'rust')
+        return "\n\n".join(extracted) if extracted else self._fallback_extract(content, "rust")
 
     def extract_go(self, content: str) -> str:
         """Extract Go public interface using regex."""
         patterns = [
             # Public functions (capitalized)
-            r'^func\s+[A-Z]\w*\s*\([^)]*\)[^{]*',
+            r"^func\s+[A-Z]\w*\s*\([^)]*\)[^{]*",
             # Public methods
-            r'^func\s+\([^)]+\)\s+[A-Z]\w*\s*\([^)]*\)[^{]*',
+            r"^func\s+\([^)]+\)\s+[A-Z]\w*\s*\([^)]*\)[^{]*",
             # Public types
-            r'^type\s+[A-Z]\w*\s+(?:struct|interface)\s*\{[^}]*\}',
+            r"^type\s+[A-Z]\w*\s+(?:struct|interface)\s*\{[^}]*\}",
             # Public constants
-            r'^const\s+[A-Z]\w*\s+[^=]+=',
+            r"^const\s+[A-Z]\w*\s+[^=]+=",
             # Public variables
-            r'^var\s+[A-Z]\w*\s+[^=]+=',
+            r"^var\s+[A-Z]\w*\s+[^=]+=",
         ]
 
         extracted = []
@@ -219,11 +223,11 @@ class InterfaceExtractor:
             matches = re.findall(pattern, content, re.MULTILINE)
             extracted.extend(matches[:10])
 
-        return '\n\n'.join(extracted) if extracted else self._fallback_extract(content, 'go')
+        return "\n\n".join(extracted) if extracted else self._fallback_extract(content, "go")
 
     def _fallback_extract(self, content: str, language: str) -> str:
         """Fallback extraction when AST/regex fails."""
-        lines = content.split('\n')
+        lines = content.split("\n")
 
         # Take first 50 non-empty, non-comment lines
         extracted = []
@@ -233,9 +237,11 @@ class InterfaceExtractor:
                 continue
 
             # Skip pure comment lines
-            if language in ['python'] and line.strip().startswith('#'):
+            if language in ["python"] and line.strip().startswith("#"):
                 continue
-            if language in ['javascript', 'typescript', 'rust', 'go'] and line.strip().startswith('//'):
+            if language in ["javascript", "typescript", "rust", "go"] and line.strip().startswith(
+                "//"
+            ):
                 continue
 
             extracted.append(line)
@@ -243,7 +249,7 @@ class InterfaceExtractor:
             if len(extracted) >= 50:
                 break
 
-        return '\n'.join(extracted)
+        return "\n".join(extracted)
 
     def extract(self, file_path: Path, content: str) -> str:
         """Extract interface based on file extension.
@@ -255,18 +261,21 @@ class InterfaceExtractor:
         Returns:
             Extracted interface or truncated content
         """
+        # .d.ts must be checked before .suffix since Path("foo.d.ts").suffix == ".ts"
+        if file_path.name.endswith(".d.ts"):
+            return content
+
         extension = file_path.suffix.lower()
 
         extractors = {
-            '.py': self.extract_python,
-            '.pyi': lambda c: c,  # Type stubs are already interface-only
-            '.ts': self.extract_typescript,
-            '.tsx': self.extract_typescript,
-            '.d.ts': lambda c: c,  # Type definitions are already interface-only
-            '.js': self.extract_javascript,
-            '.jsx': self.extract_javascript,
-            '.rs': self.extract_rust,
-            '.go': self.extract_go,
+            ".py": self.extract_python,
+            ".pyi": lambda c: c,  # Type stubs are already interface-only
+            ".ts": self.extract_typescript,
+            ".tsx": self.extract_typescript,
+            ".js": self.extract_javascript,
+            ".jsx": self.extract_javascript,
+            ".rs": self.extract_rust,
+            ".go": self.extract_go,
         }
 
         extractor = extractors.get(extension)

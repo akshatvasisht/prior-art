@@ -6,40 +6,18 @@ The agent should call this after narrowing down to 1-2 top candidates.
 """
 
 import logging
-from typing import Dict, Any, Optional, List
-from importlib.resources import files
-
-import yaml
+from typing import Any
 
 from .ingestion import RepositoryIngester
 from .query import QueryMapper
+from .utils import load_config, validate_github_url
 
 logger = logging.getLogger(__name__)
 
 
-def load_config() -> Dict[str, Any]:
-    """Load configuration from bundled config.yaml.
-
-    Returns:
-        Configuration dictionary
-
-    Raises:
-        Exception: If config file is missing or invalid.
-            Hint: Ensure src/priorart/data/config.yaml exists.
-    """
-    try:
-        config_text = files('priorart.data').joinpath('config.yaml').read_text()
-        return yaml.safe_load(config_text)
-    except Exception as e:
-        logger.error(f"Failed to load config: {e}")
-        raise
-
-
 def ingest_repo(
-    repo_url: str,
-    language: Optional[str] = None,
-    category: Optional[str] = None
-) -> Dict[str, Any]:
+    repo_url: str, language: str | None = None, category: str | None = None
+) -> dict[str, Any]:
     """Ingest a GitHub repository to understand its public interface.
 
     IMPORTANT: Call this on ONE candidate at a time, not all candidates.
@@ -72,18 +50,18 @@ def ingest_repo(
         # Load configuration
         config = load_config()
 
-        # Validate URL
-        if not repo_url.startswith('https://github.com/'):
+        normalized_url = validate_github_url(repo_url)
+        if not normalized_url:
             return {
                 "status": "error",
-                "message": "Invalid repository URL. Must be https://github.com/owner/repo format."
+                "message": "Invalid repository URL. Must be https://github.com/owner/repo format.",
             }
 
         # Initialize ingester
         ingester = RepositoryIngester(
-            char_budget=config['ingestion']['char_budget'],
-            max_repo_mb=config['ingestion']['ingest_max_repo_mb'],
-            timeout_seconds=config['ingestion']['ingest_timeout_seconds']
+            char_budget=config["ingestion"]["char_budget"],
+            max_repo_mb=config["ingestion"]["ingest_max_repo_mb"],
+            timeout_seconds=config["ingestion"]["ingest_timeout_seconds"],
         )
 
         # Get priority files based on language and category
@@ -96,7 +74,7 @@ def ingest_repo(
                 logger.warning(f"Failed to get priority files: {e}")
 
         # Ingest repository
-        result = ingester.ingest(repo_url, priority_files)
+        result = ingester.ingest(normalized_url, priority_files)
 
         # Format response
         response = {
@@ -106,7 +84,7 @@ def ingest_repo(
             "files_skipped": result.files_skipped,
             "total_chars": result.total_chars,
             "monorepo_warning": result.monorepo_warning,
-            "content_warnings": result.content_warnings
+            "content_warnings": result.content_warnings,
         }
 
         # Add warnings to message if present
@@ -124,22 +102,13 @@ def ingest_repo(
 
     except ValueError as e:
         # Expected errors (validation, size limits, etc.)
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+        return {"status": "error", "message": str(e)}
 
     except RuntimeError as e:
         # Runtime errors (clone failures, timeouts, etc.)
-        return {
-            "status": "error",
-            "message": f"Repository ingestion failed: {str(e)}"
-        }
+        return {"status": "error", "message": f"Repository ingestion failed: {str(e)}"}
 
     except Exception as e:
         # Unexpected errors
         logger.error(f"Unexpected error in ingest_repo: {e}", exc_info=True)
-        return {
-            "status": "error",
-            "message": f"An unexpected error occurred: {str(e)}"
-        }
+        return {"status": "error", "message": f"An unexpected error occurred: {str(e)}"}

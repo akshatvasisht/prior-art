@@ -2,7 +2,6 @@
 
 # Mark seed cache as binary (if present)
 *.db binary
-*.db.sha256 text
 
 # Python source
 *.py text eol=lf

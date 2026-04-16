@@ -1,9 +1,6 @@
 """Tests for query and taxonomy mapping."""
 
-import pytest
-from pathlib import Path
-
-from priorart.core.query import QueryMapper, TaxonomyCategory
+from priorart.core.query import QueryMapper
 
 
 def test_query_mapper_initialization():
@@ -39,19 +36,11 @@ def test_query_mapping_authentication():
     """Test mapping authentication queries."""
     mapper = QueryMapper(confidence_threshold=0.6)
 
-    # Test various phrasings
-    queries = [
-        "authentication",
-        "user login",
-        "oauth integration",
-        "jwt auth"
-    ]
+    result = mapper.map_query("authentication", "python")
 
-    for query in queries:
-        result = mapper.map_query(query, "python")
-        if result.matched:
-            assert result.category.id == "authentication"
-            assert result.service_note is not None  # Auth has service note
+    assert result.matched is True
+    assert result.category.id == "authentication"
+    assert result.service_note is not None
 
 
 def test_query_mapping_no_match():
@@ -66,16 +55,17 @@ def test_query_mapping_no_match():
 
 def test_query_mapping_confidence_threshold():
     """Test confidence threshold filtering."""
-    # High threshold
+    # At 0.9 the same query that passes 0.3 is filtered out
     mapper_strict = QueryMapper(confidence_threshold=0.9)
-    result = mapper_strict.map_query("web requests", "python")
-    # May not match with very high threshold
+    strict_result = mapper_strict.map_query("web requests", "python")
 
-    # Low threshold
     mapper_lenient = QueryMapper(confidence_threshold=0.3)
-    result = mapper_lenient.map_query("web requests", "python")
-    # Should match with low threshold
-    assert result.matched is True
+    lenient_result = mapper_lenient.map_query("web requests", "python")
+
+    assert lenient_result.matched is True
+    # Strict threshold must be at least as restrictive as lenient
+    if lenient_result.confidence < 0.9:
+        assert strict_result.matched is False
 
 
 def test_text_normalization():
@@ -115,14 +105,10 @@ def test_language_specific_search_terms():
     result_python = mapper.map_query("http client", "python")
     result_javascript = mapper.map_query("http client", "javascript")
 
-    if result_python.matched and result_javascript.matched:
-        # Python and JavaScript may have different search terms
-        python_query = result_python.search_query
-        js_query = result_javascript.search_query
-
-        # Both should be valid
-        assert python_query is not None
-        assert js_query is not None
+    assert result_python.matched is True
+    assert result_javascript.matched is True
+    assert result_python.search_query is not None
+    assert result_javascript.search_query is not None
 
 
 def test_priority_files_retrieval():
@@ -178,3 +164,69 @@ def test_service_note_categories():
                 # (though not all might)
                 if cat_id in ["authentication", "database", "queue"]:
                     assert category.service_note is not None
+
+
+def test_map_query_empty_input():
+    """Empty string returns no match."""
+    mapper = QueryMapper()
+
+    result = mapper.map_query("", "python")
+
+    assert result.matched is False
+    assert result.confidence == 0.0
+
+
+def test_load_custom_taxonomy_path(tmp_path):
+    """QueryMapper loads taxonomy from a custom file path."""
+    taxonomy_file = tmp_path / "taxonomy.yaml"
+    taxonomy_file.write_text("""
+categories:
+  - id: custom_cat
+    keywords: ["custom", "test"]
+    search_terms:
+      default: "custom test"
+    priority_files:
+      default: ["*.py"]
+""")
+
+    mapper = QueryMapper(taxonomy_path=taxonomy_file)
+    assert len(mapper.categories) == 1
+    assert mapper.categories[0].id == "custom_cat"
+
+
+def test_load_bundled_taxonomy_failure():
+    """QueryMapper returns empty categories when bundled taxonomy fails."""
+    from unittest.mock import patch
+
+    with patch('priorart.core.query.files', side_effect=FileNotFoundError("no data")):
+        mapper = QueryMapper(taxonomy_path=None)
+
+    assert mapper.categories == []
+
+
+def test_load_taxonomy_parse_error(tmp_path):
+    """QueryMapper returns empty categories when YAML is invalid."""
+    bad_file = tmp_path / "bad.yaml"
+    bad_file.write_text("not: valid: yaml: [")
+
+    mapper = QueryMapper(taxonomy_path=bad_file)
+    assert mapper.categories == []
+
+
+def test_score_category_empty_keywords():
+    """_score_category returns 0 for category with no keywords."""
+    from priorart.core.query import TaxonomyCategory
+
+    mapper = QueryMapper()
+    cat = TaxonomyCategory(id="empty", keywords=[], search_terms={}, priority_files={})
+
+    score = mapper._score_category(["http", "client"], cat)
+    assert score == 0.0
+
+
+def test_get_priority_files_unknown_category():
+    """get_priority_files returns default for unknown category ID."""
+    mapper = QueryMapper()
+
+    patterns = mapper.get_priority_files("nonexistent_category", "python")
+    assert patterns == ["README*", "*.md"]

@@ -2,8 +2,8 @@
 
 import os
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from datetime import datetime, timedelta
 
 import pytest
 
@@ -38,7 +38,6 @@ def sample_package_snapshot():
         github_url='https://github.com/psf/requests',
         identity_verified=True,
         weekly_downloads=45000000,
-        download_percentile=0.99,
         star_count=50000,
         fork_count=9000,
         fork_to_star_ratio=0.18,
@@ -51,7 +50,7 @@ def sample_package_snapshot():
         weekly_commit_cv=0.25,
         recent_committer_count=25,
         latest_version='2.31.0',
-        first_release_date=datetime(2011, 2, 13),
+        first_release_date=datetime(2011, 2, 13, tzinfo=timezone.utc),
         release_cv=0.3,
         major_versions_per_year=0.15,
         direct_dep_count=5,
@@ -60,8 +59,8 @@ def sample_package_snapshot():
         reverse_dep_count=150000,
         description='Python HTTP for Humans',
         license='Apache-2.0',
-        created_at=datetime.utcnow() - timedelta(days=30),
-        updated_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc) - timedelta(days=30),
+        updated_at=datetime.now(timezone.utc),
     )
 
 
@@ -80,7 +79,6 @@ def sample_package_data():
         'language': 'python',
         'identity_verified': True,
         'weekly_downloads': 45000000,
-        'download_percentile': 0.99,
         'star_count': 50000,
         'fork_count': 9000,
         'fork_to_star_ratio': 0.18,
@@ -92,7 +90,7 @@ def sample_package_data():
         'mttr_state': 'measured',
         'weekly_commit_cv': 0.25,
         'recent_committer_count': 25,
-        'first_release_date': datetime(2011, 2, 13),
+        'first_release_date': datetime(2011, 2, 13, tzinfo=timezone.utc),
         'latest_version': '2.31.0',
         'release_cv': 0.3,
         'major_versions_per_year': 0.15,
