@@ -3,7 +3,7 @@
     width="200" 
     height="200" 
     alt="Prior Art Logo" 
-    src="docs/images/logo.png" 
+    src="https://raw.githubusercontent.com/akshatvasisht/prior-art/main/docs/images/logo.png" 
   />
 </p>
 

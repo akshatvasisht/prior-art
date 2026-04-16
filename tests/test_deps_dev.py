@@ -10,16 +10,19 @@ from priorart.core.deps_dev import (
 )
 
 
-def _make_version(version: str, published: str | None = None,
-                  prerelease: bool = False, yanked: bool = False) -> VersionInfo:
+def _make_version(
+    version: str, published: str | None = None, prerelease: bool = False, yanked: bool = False
+) -> VersionInfo:
     pub = None
     if published:
         pub = datetime.fromisoformat(published)
-    return VersionInfo(version=version, published_at=pub,
-                       is_prerelease=prerelease, is_yanked=yanked)
+    return VersionInfo(
+        version=version, published_at=pub, is_prerelease=prerelease, is_yanked=yanked
+    )
 
 
 # --- _get_latest_stable_version ---
+
 
 class TestGetLatestStableVersion:
     def setup_method(self):
@@ -51,6 +54,7 @@ class TestGetLatestStableVersion:
 
 
 # --- _calculate_release_cv ---
+
 
 class TestCalculateReleaseCV:
     def setup_method(self):
@@ -99,6 +103,7 @@ class TestCalculateReleaseCV:
 
 # --- _calculate_major_versions_per_year ---
 
+
 class TestMajorVersionsPerYear:
     def setup_method(self):
         self.client = DepsDevClient.__new__(DepsDevClient)
@@ -124,20 +129,21 @@ class TestMajorVersionsPerYear:
 
 # --- _parse_dependency_info ---
 
+
 class TestParseDependencyInfo:
     def setup_method(self):
         self.client = DepsDevClient.__new__(DepsDevClient)
 
     def test_parses_counts(self):
         version_data = {
-            'relations': [
-                {'relation': 'DIRECT'},
-                {'relation': 'DIRECT'},
-                {'relation': 'INDIRECT'},
+            "relations": [
+                {"relation": "DIRECT"},
+                {"relation": "DIRECT"},
+                {"relation": "INDIRECT"},
             ],
-            'resolvedDependencies': [
-                {'advisories': [{'id': 'CVE-1'}]},
-                {'isDeprecated': True},
+            "resolvedDependencies": [
+                {"advisories": [{"id": "CVE-1"}]},
+                {"isDeprecated": True},
                 {},
             ],
         }
@@ -157,24 +163,25 @@ class TestParseDependencyInfo:
 
 # --- _extract_github_url ---
 
+
 class TestExtractGithubUrl:
     def setup_method(self):
         self.client = DepsDevClient.__new__(DepsDevClient)
 
     def test_extracts_github_url(self):
         data = {
-            'sourceRepository': {
-                'type': 'GITHUB',
-                'url': 'https://github.com/psf/requests',
+            "sourceRepository": {
+                "type": "GITHUB",
+                "url": "https://github.com/psf/requests",
             }
         }
-        assert self.client._extract_github_url(data) == 'https://github.com/psf/requests'
+        assert self.client._extract_github_url(data) == "https://github.com/psf/requests"
 
     def test_non_github_returns_none(self):
         data = {
-            'sourceRepository': {
-                'type': 'GITLAB',
-                'url': 'https://gitlab.com/owner/repo',
+            "sourceRepository": {
+                "type": "GITLAB",
+                "url": "https://gitlab.com/owner/repo",
             }
         }
         assert self.client._extract_github_url(data) is None
@@ -185,42 +192,43 @@ class TestExtractGithubUrl:
 
 # --- _parse_versions ---
 
+
 class TestParseVersions:
     def setup_method(self):
         self.client = DepsDevClient.__new__(DepsDevClient)
 
     def test_parses_version_list(self):
         data = {
-            'versions': [
+            "versions": [
                 {
-                    'versionKey': {'version': '1.0.0'},
-                    'publishedAt': '2023-01-15T10:00:00Z',
-                    'isYanked': False,
+                    "versionKey": {"version": "1.0.0"},
+                    "publishedAt": "2023-01-15T10:00:00Z",
+                    "isYanked": False,
                 },
                 {
-                    'versionKey': {'version': '2.0.0-beta.1'},
-                    'publishedAt': '2024-01-01T00:00:00Z',
-                    'isYanked': False,
+                    "versionKey": {"version": "2.0.0-beta.1"},
+                    "publishedAt": "2024-01-01T00:00:00Z",
+                    "isYanked": False,
                 },
             ]
         }
         versions = self.client._parse_versions(data)
 
         assert len(versions) == 2
-        assert versions[0].version == '1.0.0'
+        assert versions[0].version == "1.0.0"
         assert versions[0].is_prerelease is False
-        assert versions[1].version == '2.0.0-beta.1'
+        assert versions[1].version == "2.0.0-beta.1"
         assert versions[1].is_prerelease is True
 
     def test_empty_versions(self):
-        assert self.client._parse_versions({'versions': []}) == []
+        assert self.client._parse_versions({"versions": []}) == []
         assert self.client._parse_versions({}) == []
 
     def test_skips_empty_version_string(self):
         data = {
-            'versions': [
-                {'versionKey': {'version': ''}, 'publishedAt': None},
-                {'versionKey': {'version': '1.0.0'}, 'publishedAt': None},
+            "versions": [
+                {"versionKey": {"version": ""}, "publishedAt": None},
+                {"versionKey": {"version": "1.0.0"}, "publishedAt": None},
             ]
         }
         versions = self.client._parse_versions(data)
@@ -228,6 +236,7 @@ class TestParseVersions:
 
 
 # --- Context manager ---
+
 
 def test_context_manager():
     """DepsDevClient supports with-statement."""
@@ -237,6 +246,7 @@ def test_context_manager():
 
 
 # --- get_package_data (mocked HTTP) ---
+
 
 class TestGetPackageData:
     def setup_method(self):
@@ -253,50 +263,60 @@ class TestGetPackageData:
     def test_full_success(self):
         """Complete get_package_data with all enrichment."""
         # Package response
-        pkg_resp = self._mock_response(200, {
-            "dependentCount": 150000,
-            "sourceRepository": {
-                "type": "GITHUB",
-                "url": "https://github.com/psf/requests",
+        pkg_resp = self._mock_response(
+            200,
+            {
+                "dependentCount": 150000,
+                "sourceRepository": {
+                    "type": "GITHUB",
+                    "url": "https://github.com/psf/requests",
+                },
             },
-        })
+        )
 
         # Versions response
-        versions_resp = self._mock_response(200, {
-            "versions": [
-                {
-                    "versionKey": {"version": "1.0.0"},
-                    "publishedAt": "2012-01-01T00:00:00Z",
-                    "isYanked": False,
-                },
-                {
-                    "versionKey": {"version": "2.31.0"},
-                    "publishedAt": "2023-06-01T00:00:00Z",
-                    "isYanked": False,
-                },
-            ]
-        })
+        versions_resp = self._mock_response(
+            200,
+            {
+                "versions": [
+                    {
+                        "versionKey": {"version": "1.0.0"},
+                        "publishedAt": "2012-01-01T00:00:00Z",
+                        "isYanked": False,
+                    },
+                    {
+                        "versionKey": {"version": "2.31.0"},
+                        "publishedAt": "2023-06-01T00:00:00Z",
+                        "isYanked": False,
+                    },
+                ]
+            },
+        )
 
         # Version detail response
-        detail_resp = self._mock_response(200, {
-            "relations": [
-                {"relation": "DIRECT"},
-                {"relation": "DIRECT"},
-                {"relation": "INDIRECT"},
-            ],
-            "resolvedDependencies": [
-                {"advisories": [{"id": "CVE-1"}]},
-                {"isDeprecated": True},
-                {},
-            ],
-        })
+        detail_resp = self._mock_response(
+            200,
+            {
+                "relations": [
+                    {"relation": "DIRECT"},
+                    {"relation": "DIRECT"},
+                    {"relation": "INDIRECT"},
+                ],
+                "resolvedDependencies": [
+                    {"advisories": [{"id": "CVE-1"}]},
+                    {"isDeprecated": True},
+                    {},
+                ],
+            },
+        )
 
         call_count = [0]
+
         def side_effect(url):
             call_count[0] += 1
-            if '/versions/' in url and call_count[0] > 2:
+            if "/versions/" in url and call_count[0] > 2:
                 return detail_resp
-            if '/versions' in url:
+            if "/versions" in url:
                 return versions_resp
             return pkg_resp
 
@@ -315,24 +335,26 @@ class TestGetPackageData:
 
     def test_404_returns_none(self):
         """404 from primary package call returns None."""
-        self.client.client.get = MagicMock(
-            return_value=self._mock_response(404)
-        )
+        self.client.client.get = MagicMock(return_value=self._mock_response(404))
 
         result = self.client.get_package_data("nonexistent", "pypi")
         assert result is None
 
     def test_versions_failure_graceful(self):
         """Versions call failure still returns package data."""
-        pkg_resp = self._mock_response(200, {
-            "dependentCount": 100,
-            "sourceRepository": {},
-        })
+        pkg_resp = self._mock_response(
+            200,
+            {
+                "dependentCount": 100,
+                "sourceRepository": {},
+            },
+        )
 
         call_count = [0]
+
         def side_effect(url):
             call_count[0] += 1
-            if '/versions' in url:
+            if "/versions" in url:
                 raise ConnectionError("timeout")
             return pkg_resp
 
@@ -350,6 +372,7 @@ class TestGetPackageData:
 
 
 # --- get_identity_fallback ---
+
 
 def test_get_identity_fallback():
     """get_identity_fallback returns github_url from get_package_data."""
@@ -372,7 +395,7 @@ def test_get_identity_fallback():
     versions_resp.json.return_value = {"versions": []}
 
     def side_effect(url):
-        if '/versions' in url:
+        if "/versions" in url:
             return versions_resp
         return resp
 
@@ -397,6 +420,7 @@ def test_get_identity_fallback_no_data():
 
 # --- DepsDevData dataclass ---
 
+
 def test_deps_dev_data_post_init():
     """DepsDevData defaults versions to empty list."""
     data = DepsDevData(package_name="test", ecosystem="pypi")
@@ -405,6 +429,7 @@ def test_deps_dev_data_post_init():
 
 # --- _parse_versions edge cases ---
 
+
 class TestParseVersionsEdgeCases:
     def setup_method(self):
         self.client = DepsDevClient.__new__(DepsDevClient)
@@ -412,11 +437,11 @@ class TestParseVersionsEdgeCases:
     def test_invalid_published_timestamp(self):
         """Invalid publishedAt is handled gracefully."""
         data = {
-            'versions': [
+            "versions": [
                 {
-                    'versionKey': {'version': '1.0.0'},
-                    'publishedAt': 'not-a-date',
-                    'isYanked': False,
+                    "versionKey": {"version": "1.0.0"},
+                    "publishedAt": "not-a-date",
+                    "isYanked": False,
                 },
             ]
         }
@@ -427,11 +452,11 @@ class TestParseVersionsEdgeCases:
     def test_unparseable_version_fallback(self):
         """Version string that packaging can't parse falls back to pattern check."""
         data = {
-            'versions': [
+            "versions": [
                 {
-                    'versionKey': {'version': 'totally-invalid-version-alpha'},
-                    'publishedAt': None,
-                    'isYanked': False,
+                    "versionKey": {"version": "totally-invalid-version-alpha"},
+                    "publishedAt": None,
+                    "isYanked": False,
                 },
             ]
         }
@@ -442,6 +467,7 @@ class TestParseVersionsEdgeCases:
 
 
 # --- _calculate_major_versions_per_year edge cases ---
+
 
 class TestMajorVersionsEdgeCases:
     def setup_method(self):
@@ -465,6 +491,7 @@ class TestMajorVersionsEdgeCases:
 
 # --- _calculate_release_cv edge cases ---
 
+
 class TestReleaseCVEdgeCases:
     def setup_method(self):
         self.client = DepsDevClient.__new__(DepsDevClient)
@@ -480,6 +507,7 @@ class TestReleaseCVEdgeCases:
 
 
 # --- get_package_data dep info exception ---
+
 
 class TestGetPackageDataDepInfoException:
     def setup_method(self):
@@ -506,11 +534,12 @@ class TestGetPackageDataDepInfoException:
         }
 
         call_count = [0]
+
         def side_effect(url):
             call_count[0] += 1
             if call_count[0] >= 3:  # dep info call
                 raise ConnectionError("timeout")
-            if '/versions' in url:
+            if "/versions" in url:
                 return versions_resp
             return pkg_resp
 

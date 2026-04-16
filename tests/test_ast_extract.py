@@ -72,10 +72,10 @@ async def async_function() -> None:
 
 def test_extract_python_syntax_error(extractor):
     """Test fallback when Python code has syntax error."""
-    code = '''
+    code = """
 def broken_function(
     # Incomplete function
-'''
+"""
 
     result = extractor.extract_python(code)
 
@@ -85,7 +85,7 @@ def broken_function(
 
 def test_extract_typescript_interface(extractor):
     """Test extracting TypeScript interfaces."""
-    code = '''
+    code = """
 export interface HTTPClient {
     get(url: string): Promise<Response>;
     post(url: string, data: any): Promise<Response>;
@@ -103,7 +103,7 @@ export class Client implements HTTPClient {
 function internalHelper() {
     // Not exported
 }
-'''
+"""
 
     result = extractor.extract_typescript(code)
 
@@ -113,7 +113,7 @@ function internalHelper() {
 
 def test_extract_rust_public_items(extractor):
     """Test extracting Rust public items."""
-    code = '''
+    code = """
 pub struct HttpClient {
     base_url: String,
 }
@@ -136,7 +136,7 @@ pub enum HttpMethod {
     Get,
     Post,
 }
-'''
+"""
 
     result = extractor.extract_rust(code)
 
@@ -146,7 +146,7 @@ pub enum HttpMethod {
 
 def test_extract_go_public_functions(extractor):
     """Test extracting Go exported functions."""
-    code = '''
+    code = """
 package http
 
 // PublicFunction is exported
@@ -167,7 +167,7 @@ type HTTPClient struct {
 func (c *HTTPClient) Get(path string) error {
     return nil
 }
-'''
+"""
 
     result = extractor.extract_go(code)
 
@@ -190,12 +190,12 @@ def test_extract_by_file_extension(extractor):
 
 def test_extract_type_stubs_passthrough(extractor):
     """Test that .pyi type stubs are passed through unchanged."""
-    pyi_code = '''
+    pyi_code = """
 def function(x: int) -> str: ...
 
 class MyClass:
     def method(self) -> None: ...
-'''
+"""
 
     result = extractor.extract(Path("stub.pyi"), pyi_code)
 
@@ -226,24 +226,24 @@ def test_extract_unknown_extension_fallback(extractor):
 
 def test_fallback_extract_filters_comments(extractor):
     """Test that fallback extraction filters comment lines."""
-    python_code = '''# This is a comment
+    python_code = """# This is a comment
 def function():
     pass
 # Another comment
 class MyClass:
     pass
-'''
+"""
 
-    result = extractor._fallback_extract(python_code, 'python')
+    result = extractor._fallback_extract(python_code, "python")
 
     # Comments should be filtered
-    lines = result.split('\n')
-    assert not any(line.strip().startswith('#') for line in lines if line.strip())
+    lines = result.split("\n")
+    assert not any(line.strip().startswith("#") for line in lines if line.strip())
 
 
 def test_extract_javascript_exports(extractor):
     """Test extracting JavaScript exports."""
-    code = '''
+    code = """
 export function publicFunction(x, y) {
     return x + y;
 }
@@ -258,7 +258,7 @@ module.exports = {
 function internalFunction() {
     // Not exported
 }
-'''
+"""
 
     result = extractor.extract_javascript(code)
 
@@ -319,8 +319,8 @@ def test_fallback_extract_typescript_comments(extractor):
     code = "// comment\nconst x = 1;\n// another\nfunction f() {}\n"
     result = extractor._fallback_extract(code, "typescript")
 
-    lines = result.split('\n')
-    assert not any(line.strip().startswith('//') for line in lines if line.strip())
+    lines = result.split("\n")
+    assert not any(line.strip().startswith("//") for line in lines if line.strip())
 
 
 def test_extract_python_attribute_base(extractor):
@@ -334,8 +334,8 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
         pass
 '''
     result = extractor.extract_python(code)
-    assert 'MyHandler' in result
-    assert 'http.server.BaseHTTPRequestHandler' in result
+    assert "MyHandler" in result
+    assert "http.server.BaseHTTPRequestHandler" in result
 
 
 def test_extract_python_non_syntax_exception(extractor):
@@ -343,7 +343,7 @@ def test_extract_python_non_syntax_exception(extractor):
     from unittest.mock import patch
 
     # Patch ast.parse to raise a non-SyntaxError
-    with patch('priorart.core.ast_extract.ast.parse', side_effect=TypeError("test error")):
+    with patch("priorart.core.ast_extract.ast.parse", side_effect=TypeError("test error")):
         result = extractor.extract_python("def hello(): pass\n")
 
     assert "def hello()" in result
@@ -355,5 +355,5 @@ def test_fallback_extract_50_line_limit(extractor):
     code = "\n".join(lines)
 
     result = extractor._fallback_extract(code, "python")
-    result_lines = [l for l in result.split('\n') if l.strip()]
+    result_lines = [line for line in result.split("\n") if line.strip()]
     assert len(result_lines) == 50

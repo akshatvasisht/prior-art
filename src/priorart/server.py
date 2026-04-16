@@ -20,7 +20,9 @@ mcp = FastMCP("priorart")
 
 
 @mcp.tool()
-def find_alternatives(language: str, task_description: str, explain: bool = False) -> dict:  # pragma: no cover
+def find_alternatives(
+    language: str, task_description: str, explain: bool = False
+) -> dict:  # pragma: no cover
     """Find and score open source packages for a given task.
 
     Discovers packages via registry APIs, scores them across 5 health dimensions
@@ -47,7 +49,9 @@ def find_alternatives(language: str, task_description: str, explain: bool = Fals
 
 
 @mcp.tool()
-def ingest_repo(repo_url: str, language: str | None = None, category: str | None = None) -> dict:  # pragma: no cover
+def ingest_repo(
+    repo_url: str, language: str | None = None, category: str | None = None
+) -> dict:  # pragma: no cover
     """Extract a GitHub repository's public interface for evaluation.
 
     Call on ONE candidate at a time after find_alternatives returns score 50-74.

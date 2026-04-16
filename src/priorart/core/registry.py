@@ -285,9 +285,9 @@ class NPMClient(RegistryClient):
 
         # Try links field
         links = package_data.get("links", {})
-        for field in ["repository", "repo", "github"]:
-            if field in links:
-                validated = validate_github_url(links[field])
+        for link_field in ["repository", "repo", "github"]:
+            if link_field in links:
+                validated = validate_github_url(links[link_field])
                 if validated:
                     return validated
 

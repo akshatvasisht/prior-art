@@ -11,6 +11,7 @@ from priorart.core.github_client import GitHubClient, GitHubSignals
 
 # --- parse_github_url ---
 
+
 class TestParseGithubUrl:
     """Test URL parsing without needing a real token."""
 
@@ -19,32 +20,42 @@ class TestParseGithubUrl:
         self.client = GitHubClient.__new__(GitHubClient)
 
     def test_standard_url(self):
-        assert self.client.parse_github_url('https://github.com/psf/requests') == ('psf', 'requests')
+        assert self.client.parse_github_url("https://github.com/psf/requests") == (
+            "psf",
+            "requests",
+        )
 
     def test_trailing_slash(self):
-        assert self.client.parse_github_url('https://github.com/psf/requests/') == ('psf', 'requests')
+        assert self.client.parse_github_url("https://github.com/psf/requests/") == (
+            "psf",
+            "requests",
+        )
 
     def test_git_suffix(self):
-        assert self.client.parse_github_url('https://github.com/owner/repo.git') == ('owner', 'repo')
+        assert self.client.parse_github_url("https://github.com/owner/repo.git") == (
+            "owner",
+            "repo",
+        )
 
     def test_subpath(self):
-        result = self.client.parse_github_url('https://github.com/owner/repo/tree/main')
-        assert result == ('owner', 'repo')
+        result = self.client.parse_github_url("https://github.com/owner/repo/tree/main")
+        assert result == ("owner", "repo")
 
     def test_invalid_http(self):
-        assert self.client.parse_github_url('http://github.com/owner/repo') is None
+        assert self.client.parse_github_url("http://github.com/owner/repo") is None
 
     def test_invalid_not_github(self):
-        assert self.client.parse_github_url('https://gitlab.com/owner/repo') is None
+        assert self.client.parse_github_url("https://gitlab.com/owner/repo") is None
 
     def test_invalid_no_repo(self):
-        assert self.client.parse_github_url('https://github.com/owner') is None
+        assert self.client.parse_github_url("https://github.com/owner") is None
 
     def test_empty(self):
-        assert self.client.parse_github_url('') is None
+        assert self.client.parse_github_url("") is None
 
 
 # --- verify_identity ---
+
 
 class TestVerifyIdentity:
     """Test identity verification with mocked PyGithub."""
@@ -54,21 +65,20 @@ class TestVerifyIdentity:
         self.client.github = MagicMock()
         self.client.stagger_ms = 0
 
-    def _mock_repo(self, name='requests', owner='psf',
-                   release_tags=None, contributor_logins=None):
+    def _mock_repo(self, name="requests", owner="psf", release_tags=None, contributor_logins=None):
         repo = MagicMock()
         repo.name = name
         repo.owner.login = owner
 
         releases = []
-        for tag in (release_tags or []):
+        for tag in release_tags or []:
             r = MagicMock()
             r.tag_name = tag
             releases.append(r)
         repo.get_releases.return_value = releases
 
         contributors = []
-        for login in (contributor_logins or []):
+        for login in contributor_logins or []:
             c = MagicMock()
             c.login = login
             contributors.append(c)
@@ -78,73 +88,77 @@ class TestVerifyIdentity:
         return repo
 
     def test_repo_name_match(self):
-        self._mock_repo(name='requests', owner='psf')
-        assert self.client.verify_identity(
-            'https://github.com/psf/requests', 'requests', []
-        ) is True
+        self._mock_repo(name="requests", owner="psf")
+        assert (
+            self.client.verify_identity("https://github.com/psf/requests", "requests", []) is True
+        )
 
     def test_release_tag_match(self):
-        self._mock_repo(name='some-repo', owner='org',
-                        release_tags=['v1.0.0', 'mylib-v2.0.0'])
-        assert self.client.verify_identity(
-            'https://github.com/org/some-repo', 'mylib', []
-        ) is True
+        self._mock_repo(name="some-repo", owner="org", release_tags=["v1.0.0", "mylib-v2.0.0"])
+        assert self.client.verify_identity("https://github.com/org/some-repo", "mylib", []) is True
 
     def test_maintainer_owner_match(self):
-        self._mock_repo(name='unrelated-name', owner='psf')
-        assert self.client.verify_identity(
-            'https://github.com/psf/unrelated-name', 'requests', ['psf']
-        ) is True
+        self._mock_repo(name="unrelated-name", owner="psf")
+        assert (
+            self.client.verify_identity(
+                "https://github.com/psf/unrelated-name", "requests", ["psf"]
+            )
+            is True
+        )
 
     def test_maintainer_contributor_match(self):
-        self._mock_repo(name='unrelated', owner='org',
-                        contributor_logins=['alice', 'bob'])
-        assert self.client.verify_identity(
-            'https://github.com/org/unrelated', 'something', ['bob']
-        ) is True
+        self._mock_repo(name="unrelated", owner="org", contributor_logins=["alice", "bob"])
+        assert (
+            self.client.verify_identity("https://github.com/org/unrelated", "something", ["bob"])
+            is True
+        )
 
     def test_no_match_returns_false(self):
-        self._mock_repo(name='totally-different', owner='someone-else')
-        assert self.client.verify_identity(
-            'https://github.com/someone-else/totally-different',
-            'my-package', ['unrelated-maintainer']
-        ) is False
+        self._mock_repo(name="totally-different", owner="someone-else")
+        assert (
+            self.client.verify_identity(
+                "https://github.com/someone-else/totally-different",
+                "my-package",
+                ["unrelated-maintainer"],
+            )
+            is False
+        )
 
     def test_invalid_url_returns_false(self):
-        assert self.client.verify_identity(
-            'not-a-url', 'pkg', []
-        ) is False
+        assert self.client.verify_identity("not-a-url", "pkg", []) is False
 
     def test_release_check_exception_graceful(self):
         """GithubException in get_releases during verify_identity is caught."""
-        repo = self._mock_repo(name='unrelated', owner='org')
+        repo = self._mock_repo(name="unrelated", owner="org")
         repo.get_releases.side_effect = GithubException(403, {}, None)
 
         # No repo name match, no release match, but maintainer matches
-        assert self.client.verify_identity(
-            'https://github.com/org/unrelated', 'pkg', ['org']
-        ) is True
+        assert (
+            self.client.verify_identity("https://github.com/org/unrelated", "pkg", ["org"]) is True
+        )
 
     def test_contributor_check_exception_graceful(self):
         """GithubException in get_contributors during verify_identity is caught."""
-        repo = self._mock_repo(name='unrelated', owner='someone')
+        repo = self._mock_repo(name="unrelated", owner="someone")
         repo.get_contributors.side_effect = GithubException(403, {}, None)
 
         # Maintainer doesn't match owner, contributors fail → no maintainer match
-        assert self.client.verify_identity(
-            'https://github.com/someone/unrelated', 'pkg', ['unknown-person']
-        ) is False
+        assert (
+            self.client.verify_identity(
+                "https://github.com/someone/unrelated", "pkg", ["unknown-person"]
+            )
+            is False
+        )
 
     def test_verify_identity_unexpected_exception(self):
         """Unexpected exception in verify_identity returns False."""
         self.client.github.get_repo.side_effect = RuntimeError("network")
 
-        assert self.client.verify_identity(
-            'https://github.com/owner/repo', 'pkg', []
-        ) is False
+        assert self.client.verify_identity("https://github.com/owner/repo", "pkg", []) is False
 
 
 # --- GitHubSignals dataclass ---
+
 
 def test_github_signals_defaults():
     """Verify default values and __post_init__ list initialization."""
@@ -158,23 +172,25 @@ def test_github_signals_defaults():
 
 # --- __init__ ---
 
+
 def test_init_missing_token():
     """GitHubClient raises ValueError without a token."""
     with patch.dict(os.environ, {}, clear=True):
         # Also clear GITHUB_TOKEN specifically
-        os.environ.pop('GITHUB_TOKEN', None)
+        os.environ.pop("GITHUB_TOKEN", None)
         with pytest.raises(ValueError, match="GitHub token required"):
             GitHubClient(token=None)
 
 
 # --- get_repository_signals ---
 
+
 class TestGetRepositorySignals:
     def setup_method(self):
         self.client = GitHubClient.__new__(GitHubClient)
         self.client.github = MagicMock()
         self.client.stagger_ms = 0
-        self.client.token = 'fake'
+        self.client.token = "fake"
 
     def _mock_repo(self):
         repo = MagicMock()
@@ -205,18 +221,18 @@ class TestGetRepositorySignals:
         """Full success path returns populated GitHubSignals."""
         self._mock_repo()
 
-        with patch.object(self.client, '_calculate_mttr', return_value=(3.5, 1.2, 'measured', 50)):
-            with patch.object(self.client, '_calculate_commit_regularity', return_value=(0.3, 15)):
-                signals = self.client.get_repository_signals('psf', 'requests')
+        with patch.object(self.client, "_calculate_mttr", return_value=(3.5, 1.2, "measured", 50)):
+            with patch.object(self.client, "_calculate_commit_regularity", return_value=(0.3, 15)):
+                signals = self.client.get_repository_signals("psf", "requests")
 
         assert signals is not None
         assert signals.star_count == 50000
         assert signals.fork_count == 9000
-        assert signals.repo_owner == 'psf'
-        assert signals.release_tags == ['v2.31.0']
-        assert signals.top_contributors == ['kennethreitz']
+        assert signals.repo_owner == "psf"
+        assert signals.release_tags == ["v2.31.0"]
+        assert signals.top_contributors == ["kennethreitz"]
         assert signals.mttr_median_days == 3.5
-        assert signals.mttr_state == 'measured'
+        assert signals.mttr_state == "measured"
         assert signals.weekly_commit_cv == 0.3
         assert signals.recent_committer_count == 15
 
@@ -226,7 +242,7 @@ class TestGetRepositorySignals:
             404, {"message": "Not Found"}, None
         )
 
-        result = self.client.get_repository_signals('owner', 'nonexistent')
+        result = self.client.get_repository_signals("owner", "nonexistent")
         assert result is None
 
     def test_release_fallback_to_tags(self):
@@ -241,21 +257,21 @@ class TestGetRepositorySignals:
         tag.name = "v1.0.0"
         repo.get_tags.return_value = [tag]
 
-        with patch.object(self.client, '_calculate_mttr', return_value=(None, None, 'unknown', 0)):
-            with patch.object(self.client, '_calculate_commit_regularity', return_value=(None, 0)):
-                signals = self.client.get_repository_signals('owner', 'repo')
+        with patch.object(self.client, "_calculate_mttr", return_value=(None, None, "unknown", 0)):
+            with patch.object(self.client, "_calculate_commit_regularity", return_value=(None, 0)):
+                signals = self.client.get_repository_signals("owner", "repo")
 
         assert signals is not None
-        assert signals.release_tags == ['v1.0.0']
+        assert signals.release_tags == ["v1.0.0"]
 
     def test_contributors_exception_graceful(self):
         """Contributors exception is handled gracefully."""
         repo = self._mock_repo()
         repo.get_contributors.side_effect = GithubException(403, {"message": "Forbidden"}, None)
 
-        with patch.object(self.client, '_calculate_mttr', return_value=(None, None, 'unknown', 0)):
-            with patch.object(self.client, '_calculate_commit_regularity', return_value=(None, 0)):
-                signals = self.client.get_repository_signals('owner', 'repo')
+        with patch.object(self.client, "_calculate_mttr", return_value=(None, None, "unknown", 0)):
+            with patch.object(self.client, "_calculate_commit_regularity", return_value=(None, 0)):
+                signals = self.client.get_repository_signals("owner", "repo")
 
         assert signals is not None
         assert signals.top_contributors == []
@@ -264,11 +280,12 @@ class TestGetRepositorySignals:
         """Unexpected non-GithubException also returns None."""
         self.client.github.get_repo.side_effect = RuntimeError("network failure")
 
-        result = self.client.get_repository_signals('owner', 'repo')
+        result = self.client.get_repository_signals("owner", "repo")
         assert result is None
 
 
 # --- _calculate_mttr ---
+
 
 class TestCalculateMTTR:
     def setup_method(self):
@@ -281,7 +298,7 @@ class TestCalculateMTTR:
         repo.has_issues = False
 
         median, mad, state, count = self.client._calculate_mttr(repo, 12, 2)
-        assert state == 'issues_disabled'
+        assert state == "issues_disabled"
         assert count == 0
 
     def test_measured_state(self):
@@ -306,7 +323,7 @@ class TestCalculateMTTR:
 
         median, mad, state, count = self.client._calculate_mttr(repo, 12, 2)
 
-        assert state == 'measured'
+        assert state == "measured"
         assert count == 15
         assert median == 10.0  # All issues resolved in 10 days
         assert mad == 0.0  # No deviation
@@ -320,7 +337,7 @@ class TestCalculateMTTR:
         # Only 5 issues (< 10)
         now = datetime.now(timezone.utc)
         issues = []
-        for i in range(5):
+        for _i in range(5):
             issue = MagicMock()
             issue.pull_request = None
             issue.created_at = now - timedelta(days=30)
@@ -333,7 +350,7 @@ class TestCalculateMTTR:
 
         median, mad, state, count = self.client._calculate_mttr(repo, 12, 2)
 
-        assert state == 'low_volume_healthy'
+        assert state == "low_volume_healthy"
         assert count == 5
 
     def test_low_volume_backlog(self):
@@ -345,7 +362,7 @@ class TestCalculateMTTR:
         # Only 3 closed (< 10)
         now = datetime.now(timezone.utc)
         issues = []
-        for i in range(3):
+        for _i in range(3):
             issue = MagicMock()
             issue.pull_request = None
             issue.created_at = now - timedelta(days=30)
@@ -358,11 +375,12 @@ class TestCalculateMTTR:
 
         median, mad, state, count = self.client._calculate_mttr(repo, 12, 2)
 
-        assert state == 'low_volume_backlog'
+        assert state == "low_volume_backlog"
         assert count == 3
 
 
 # --- _calculate_commit_regularity ---
+
 
 class TestCalculateCommitRegularity:
     def setup_method(self):
@@ -417,6 +435,7 @@ class TestCalculateCommitRegularity:
 
 # --- MTTR edge cases ---
 
+
 class TestMTTREdgeCases:
     def setup_method(self):
         self.client = GitHubClient.__new__(GitHubClient)
@@ -429,7 +448,7 @@ class TestMTTREdgeCases:
         repo.get_issues.side_effect = RuntimeError("API down")
 
         median, mad, state, count = self.client._calculate_mttr(repo, 12, 2)
-        assert state == 'unknown'
+        assert state == "unknown"
         assert count == 0
 
     def test_mttr_zero_closed_with_open_issues(self):
@@ -443,7 +462,7 @@ class TestMTTREdgeCases:
         repo.get_issues.return_value = page_mock
 
         median, mad, state, count = self.client._calculate_mttr(repo, 12, 2)
-        assert state == 'low_volume_backlog'
+        assert state == "low_volume_backlog"
 
     def test_mttr_skips_pull_requests(self):
         """PRs are filtered out from MTTR calculation."""
@@ -455,7 +474,7 @@ class TestMTTREdgeCases:
         issues = []
 
         # 12 real issues
-        for i in range(12):
+        for _i in range(12):
             issue = MagicMock()
             issue.pull_request = None
             issue.created_at = now - timedelta(days=20)
@@ -463,7 +482,7 @@ class TestMTTREdgeCases:
             issues.append(issue)
 
         # 3 pull requests (should be skipped)
-        for i in range(3):
+        for _i in range(3):
             pr = MagicMock()
             pr.pull_request = MagicMock()  # truthy = is a PR
             pr.created_at = now - timedelta(days=10)
@@ -475,31 +494,33 @@ class TestMTTREdgeCases:
         repo.get_issues.return_value = page_mock
 
         median, mad, state, count = self.client._calculate_mttr(repo, 12, 2)
-        assert state == 'measured'
+        assert state == "measured"
         assert count == 12  # Only real issues counted
         assert median == 5.0
 
 
 # --- __init__ success ---
 
+
 def test_init_success():
     """GitHubClient.__init__ succeeds with valid token."""
-    with patch('priorart.core.github_client.Github') as mock_github:
-        client = GitHubClient(token='test-token')
+    with patch("priorart.core.github_client.Github") as mock_github:
+        client = GitHubClient(token="test-token")
 
-    assert client.token == 'test-token'
+    assert client.token == "test-token"
     assert client.stagger_ms == 100
-    mock_github.assert_called_once_with('test-token')
+    mock_github.assert_called_once_with("test-token")
 
 
 # --- Both releases and tags fail ---
+
 
 class TestReleasesAndTagsBothFail:
     def setup_method(self):
         self.client = GitHubClient.__new__(GitHubClient)
         self.client.github = MagicMock()
         self.client.stagger_ms = 0
-        self.client.token = 'fake'
+        self.client.token = "fake"
 
     def test_both_releases_and_tags_fail(self):
         """When both get_releases and get_tags raise, release_tags stays empty."""
@@ -523,15 +544,16 @@ class TestReleasesAndTagsBothFail:
 
         self.client.github.get_repo.return_value = repo
 
-        with patch.object(self.client, '_calculate_mttr', return_value=(None, None, 'unknown', 0)):
-            with patch.object(self.client, '_calculate_commit_regularity', return_value=(None, 0)):
-                signals = self.client.get_repository_signals('owner', 'repo')
+        with patch.object(self.client, "_calculate_mttr", return_value=(None, None, "unknown", 0)):
+            with patch.object(self.client, "_calculate_commit_regularity", return_value=(None, 0)):
+                signals = self.client.get_repository_signals("owner", "repo")
 
         assert signals is not None
         assert signals.release_tags == []
 
 
 # --- MTTR page fetch exception ---
+
 
 class TestMTTRPageException:
     def setup_method(self):
@@ -547,7 +569,7 @@ class TestMTTRPageException:
         now = datetime.now(timezone.utc)
         # First page has 5 issues
         issues = []
-        for i in range(5):
+        for _i in range(5):
             issue = MagicMock()
             issue.pull_request = None
             issue.created_at = now - timedelta(days=30)
@@ -562,5 +584,5 @@ class TestMTTRPageException:
         median, mad, state, count = self.client._calculate_mttr(repo, 12, 2)
 
         # 5 issues < 10, so low_volume path
-        assert state == 'low_volume_healthy'
+        assert state == "low_volume_healthy"
         assert count == 5

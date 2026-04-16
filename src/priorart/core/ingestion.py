@@ -106,9 +106,15 @@ class RepositoryIngester:
             except Exception:
                 # Fallback if config.yaml is unavailable — config.yaml is canonical
                 self._injection_patterns = [
-                    re.escape(p) for p in [
-                        "IGNORE PREVIOUS", "SYSTEM:", r"\[INST\]", "<<<OVERRIDE",
-                        "###INSTRUCTION", "DISREGARD ALL", "NEW INSTRUCTIONS",
+                    re.escape(p)
+                    for p in [
+                        "IGNORE PREVIOUS",
+                        "SYSTEM:",
+                        r"\[INST\]",
+                        "<<<OVERRIDE",
+                        "###INSTRUCTION",
+                        "DISREGARD ALL",
+                        "NEW INSTRUCTIONS",
                     ]
                 ]
 

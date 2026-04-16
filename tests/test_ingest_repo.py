@@ -10,15 +10,15 @@ def test_ingest_repo_invalid_url():
     """Invalid URL returns error dict without raising."""
     result = ingest_repo("not-a-url")
 
-    assert result['status'] == 'error'
-    assert 'Invalid' in result['message'] or 'invalid' in result['message']
+    assert result["status"] == "error"
+    assert "Invalid" in result["message"] or "invalid" in result["message"]
 
 
 def test_ingest_repo_non_github_url():
     """Non-GitHub URL returns error."""
     result = ingest_repo("https://gitlab.com/owner/repo")
 
-    assert result['status'] == 'error'
+    assert result["status"] == "error"
 
 
 # ---------------------------------------------------------------------------
@@ -92,9 +92,7 @@ def test_success_monorepo_warning(mock_load_config, mock_ingester_cls):
             "ingest_timeout_seconds": 60,
         }
     }
-    mock_ingester_cls.return_value.ingest.return_value = _make_result(
-        monorepo_warning=True
-    )
+    mock_ingester_cls.return_value.ingest.return_value = _make_result(monorepo_warning=True)
 
     result = ingest_repo(VALID_URL)
 
@@ -116,9 +114,7 @@ def test_success_content_warnings(mock_load_config, mock_ingester_cls):
         }
     }
     warnings = ["Prompt injection detected in setup.py"]
-    mock_ingester_cls.return_value.ingest.return_value = _make_result(
-        content_warnings=warnings
-    )
+    mock_ingester_cls.return_value.ingest.return_value = _make_result(content_warnings=warnings)
 
     result = ingest_repo(VALID_URL)
 
@@ -136,9 +132,7 @@ def test_success_content_warnings(mock_load_config, mock_ingester_cls):
 @patch("priorart.core.ingest_repo.QueryMapper")
 @patch("priorart.core.ingest_repo.RepositoryIngester")
 @patch("priorart.core.ingest_repo.load_config")
-def test_success_with_language_and_category(
-    mock_load_config, mock_ingester_cls, mock_qm_cls
-):
+def test_success_with_language_and_category(mock_load_config, mock_ingester_cls, mock_qm_cls):
     """When language+category provided, QueryMapper supplies priority_files."""
     mock_load_config.return_value = {
         "ingestion": {
@@ -156,9 +150,7 @@ def test_success_with_language_and_category(
     result = ingest_repo(VALID_URL, language="python", category="http-client")
 
     assert result["status"] == "success"
-    mock_qm_cls.return_value.get_priority_files.assert_called_once_with(
-        "http-client", "python"
-    )
+    mock_qm_cls.return_value.get_priority_files.assert_called_once_with("http-client", "python")
     mock_ingester_cls.return_value.ingest.assert_called_once_with(
         "https://github.com/psf/requests", ["src/**/*.py", "setup.py"]
     )
@@ -178,9 +170,7 @@ def test_query_mapper_failure_falls_back_gracefully(
             "ingest_timeout_seconds": 60,
         }
     }
-    mock_qm_cls.return_value.get_priority_files.side_effect = KeyError(
-        "unknown category"
-    )
+    mock_qm_cls.return_value.get_priority_files.side_effect = KeyError("unknown category")
     mock_ingester_cls.return_value.ingest.return_value = _make_result()
 
     result = ingest_repo(VALID_URL, language="python", category="nonexistent")
@@ -208,9 +198,7 @@ def test_value_error_from_ingester(mock_load_config, mock_ingester_cls):
             "ingest_timeout_seconds": 60,
         }
     }
-    mock_ingester_cls.return_value.ingest.side_effect = ValueError(
-        "Repository exceeds size limit"
-    )
+    mock_ingester_cls.return_value.ingest.side_effect = ValueError("Repository exceeds size limit")
 
     result = ingest_repo(VALID_URL)
 
@@ -229,9 +217,7 @@ def test_runtime_error_from_ingester(mock_load_config, mock_ingester_cls):
             "ingest_timeout_seconds": 60,
         }
     }
-    mock_ingester_cls.return_value.ingest.side_effect = RuntimeError(
-        "git clone timed out"
-    )
+    mock_ingester_cls.return_value.ingest.side_effect = RuntimeError("git clone timed out")
 
     result = ingest_repo(VALID_URL)
 

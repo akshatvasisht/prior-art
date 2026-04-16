@@ -24,11 +24,11 @@ def test_pypi_get_package_info():
     """Test fetching package info from PyPI."""
     client = PyPIClient()
 
-    result = client.get_package_info('requests')
+    result = client.get_package_info("requests")
 
     assert result is not None
-    assert result.name == 'requests'
-    assert result.registry == 'pypi'
+    assert result.name == "requests"
+    assert result.registry == "pypi"
     assert result.description is not None
     assert result.version is not None
 
@@ -38,7 +38,7 @@ def test_pypi_package_not_found():
     """Test PyPI returns None for non-existent package."""
     client = PyPIClient()
 
-    result = client.get_package_info('this-package-definitely-does-not-exist-12345')
+    result = client.get_package_info("this-package-definitely-does-not-exist-12345")
 
     assert result is None
 
@@ -48,12 +48,12 @@ def test_npm_search():
     """Test searching npm registry."""
     client = NPMClient()
 
-    results = client.search('express', max_results=5)
+    results = client.search("express", max_results=5)
 
     assert len(results) > 0
-    assert any(r.name == 'express' for r in results)
+    assert any(r.name == "express" for r in results)
     # All results should be npm
-    assert all(r.registry == 'npm' for r in results)
+    assert all(r.registry == "npm" for r in results)
 
 
 @pytest.mark.integration
@@ -61,11 +61,11 @@ def test_npm_get_package_info():
     """Test fetching package info from npm."""
     client = NPMClient()
 
-    result = client.get_package_info('express')
+    result = client.get_package_info("express")
 
     assert result is not None
-    assert result.name == 'express'
-    assert result.registry == 'npm'
+    assert result.name == "express"
+    assert result.registry == "npm"
     assert result.description is not None
 
 
@@ -74,11 +74,11 @@ def test_crates_io_search():
     """Test searching crates.io."""
     client = CratesIOClient()
 
-    results = client.search('serde', max_results=5)
+    results = client.search("serde", max_results=5)
 
     assert len(results) > 0
     # All results should be cargo
-    assert all(r.registry == 'cargo' for r in results)
+    assert all(r.registry == "cargo" for r in results)
 
 
 @pytest.mark.integration
@@ -86,60 +86,60 @@ def test_crates_io_get_package_info():
     """Test fetching crate info from crates.io."""
     client = CratesIOClient()
 
-    result = client.get_package_info('serde')
+    result = client.get_package_info("serde")
 
     assert result is not None
-    assert result.name == 'serde'
-    assert result.registry == 'cargo'
+    assert result.name == "serde"
+    assert result.registry == "cargo"
 
 
 def test_validate_github_url():
     """Test GitHub URL validation."""
     # Valid URLs
-    assert validate_github_url('https://github.com/psf/requests') is not None
-    assert validate_github_url('https://github.com/owner/repo/') is not None
+    assert validate_github_url("https://github.com/psf/requests") is not None
+    assert validate_github_url("https://github.com/owner/repo/") is not None
 
     # Invalid URLs
-    assert validate_github_url('http://github.com/owner/repo') is None
-    assert validate_github_url('https://gitlab.com/owner/repo') is None
-    assert validate_github_url('not-a-url') is None
-    assert validate_github_url('') is None
+    assert validate_github_url("http://github.com/owner/repo") is None
+    assert validate_github_url("https://gitlab.com/owner/repo") is None
+    assert validate_github_url("not-a-url") is None
+    assert validate_github_url("") is None
 
 
 def test_validate_github_url_strips_git_suffix():
     """Test that .git suffix is removed."""
-    result = validate_github_url('https://github.com/owner/repo.git')
+    result = validate_github_url("https://github.com/owner/repo.git")
 
-    assert result == 'https://github.com/owner/repo'
+    assert result == "https://github.com/owner/repo"
 
 
 def test_get_registry_client():
     """Test getting correct registry client for language."""
-    assert isinstance(get_registry_client('python'), PyPIClient)
-    assert isinstance(get_registry_client('javascript'), NPMClient)
-    assert isinstance(get_registry_client('typescript'), NPMClient)
-    assert isinstance(get_registry_client('rust'), CratesIOClient)
-    assert isinstance(get_registry_client('cargo'), CratesIOClient)
+    assert isinstance(get_registry_client("python"), PyPIClient)
+    assert isinstance(get_registry_client("javascript"), NPMClient)
+    assert isinstance(get_registry_client("typescript"), NPMClient)
+    assert isinstance(get_registry_client("rust"), CratesIOClient)
+    assert isinstance(get_registry_client("cargo"), CratesIOClient)
 
 
 def test_get_registry_client_unknown_language():
     """Test that unknown language raises error."""
     with pytest.raises(ValueError, match="Unsupported language"):
-        get_registry_client('cobol')
+        get_registry_client("cobol")
 
 
 def test_package_candidate_structure():
     """Test PackageCandidate dataclass structure."""
     candidate = PackageCandidate(
-        name='test-package',
-        registry='pypi',
-        description='A test package',
-        version='1.0.0',
-        github_url='https://github.com/test/package',
+        name="test-package",
+        registry="pypi",
+        description="A test package",
+        version="1.0.0",
+        github_url="https://github.com/test/package",
     )
 
-    assert candidate.name == 'test-package'
-    assert candidate.registry == 'pypi'
+    assert candidate.name == "test-package"
+    assert candidate.registry == "pypi"
     assert candidate.maintainers == []  # Default empty list
 
 
@@ -148,12 +148,12 @@ def test_npm_extract_github_url():
     """Test extracting GitHub URL from npm package."""
     client = NPMClient()
 
-    result = client.get_package_info('express')
+    result = client.get_package_info("express")
 
     assert result is not None, "npm API returned None for 'express'"
     assert result.github_url is not None, "express package should have a GitHub URL"
-    assert 'github.com' in result.github_url
-    assert result.github_url.startswith('https://')
+    assert "github.com" in result.github_url
+    assert result.github_url.startswith("https://")
 
 
 @pytest.mark.integration
@@ -161,7 +161,7 @@ def test_pypi_extract_maintainers():
     """Test extracting maintainers from PyPI."""
     client = PyPIClient()
 
-    result = client.get_package_info('requests')
+    result = client.get_package_info("requests")
 
     assert result is not None, "PyPI API returned None for 'requests'"
     assert result.author or result.maintainers, "requests package should have author or maintainers"
@@ -169,11 +169,12 @@ def test_pypi_extract_maintainers():
 
 # --- Unit tests (no network) ---
 
+
 def test_package_candidate_eq_and_hash():
     """Test __eq__ and __hash__ on PackageCandidate."""
-    a = PackageCandidate(name='pkg', registry='pypi', description='A')
-    b = PackageCandidate(name='pkg', registry='pypi', description='B')
-    c = PackageCandidate(name='other', registry='pypi')
+    a = PackageCandidate(name="pkg", registry="pypi", description="A")
+    b = PackageCandidate(name="pkg", registry="pypi", description="B")
+    c = PackageCandidate(name="other", registry="pypi")
 
     # Same name+registry → equal
     assert a == b
@@ -205,14 +206,14 @@ def test_pypi_search_mocked():
 
     def mock_get(url, **kwargs):
         resp = MagicMock()
-        if 'pypistats.org' in url:
+        if "pypistats.org" in url:
             resp.status_code = 200
             resp.json.return_value = {"data": {"last_week": 100000}}
             return resp
-        if '/pypi/' in url:
+        if "/pypi/" in url:
             # Return data for any package lookup
-            pkg_name = url.split('/pypi/')[1].split('/')[0]
-            if pkg_name in ('http-client', 'http', 'python-http', 'py-http'):
+            pkg_name = url.split("/pypi/")[1].split("/")[0]
+            if pkg_name in ("http-client", "http", "python-http", "py-http"):
                 resp.status_code = 200
                 resp.json.return_value = {
                     "info": {
@@ -237,7 +238,7 @@ def test_pypi_search_mocked():
     results = client.search("http client", max_results=10)
 
     assert len(results) >= 1
-    assert all(r.registry == 'pypi' for r in results)
+    assert all(r.registry == "pypi" for r in results)
 
 
 def test_pypi_homepage_github_fallback():
@@ -265,7 +266,7 @@ def test_pypi_homepage_github_fallback():
     stats_resp.status_code = 404
 
     def side_effect(url, **kwargs):
-        if 'pypistats.org' in url:
+        if "pypistats.org" in url:
             return stats_resp
         return resp
 
@@ -302,7 +303,7 @@ def test_pypi_maintainer_email_extraction():
     stats_resp.status_code = 404
 
     def side_effect(url, **kwargs):
-        if 'pypistats.org' in url:
+        if "pypistats.org" in url:
             return stats_resp
         return resp
 
@@ -321,12 +322,12 @@ def test_go_client_search_and_info():
 
     results = client.search("http client", max_results=5)
     assert len(results) > 0
-    assert any('resty' in r.name for r in results)
+    assert any("resty" in r.name for r in results)
 
     info = client.get_package_info("github.com/go-resty/resty")
     assert info is not None
     assert info.github_url is not None
-    assert 'github.com' in info.github_url
+    assert "github.com" in info.github_url
 
 
 def test_npm_extract_github_url_git_prefix():
@@ -473,10 +474,14 @@ def test_pypi_maintainer_field():
     resp.status_code = 200
     resp.json.return_value = {
         "info": {
-            "summary": "lib", "version": "1.0.0",
-            "project_urls": None, "home_page": None,
-            "author": "Alice", "author_email": None,
-            "maintainer": "Bob", "maintainer_email": None,
+            "summary": "lib",
+            "version": "1.0.0",
+            "project_urls": None,
+            "home_page": None,
+            "author": "Alice",
+            "author_email": None,
+            "maintainer": "Bob",
+            "maintainer_email": None,
             "license": "MIT",
         }
     }
@@ -484,7 +489,7 @@ def test_pypi_maintainer_field():
     stats.status_code = 404
 
     def side_effect(url, **kw):
-        return stats if 'pypistats.org' in url else resp
+        return stats if "pypistats.org" in url else resp
 
     client.client.get = side_effect
 
@@ -502,10 +507,14 @@ def test_pypi_pypistats_exception():
     resp.status_code = 200
     resp.json.return_value = {
         "info": {
-            "summary": "lib", "version": "1.0.0",
-            "project_urls": None, "home_page": None,
-            "author": "A", "author_email": None,
-            "maintainer": None, "maintainer_email": None,
+            "summary": "lib",
+            "version": "1.0.0",
+            "project_urls": None,
+            "home_page": None,
+            "author": "A",
+            "author_email": None,
+            "maintainer": None,
+            "maintainer_email": None,
             "license": "MIT",
         }
     }
@@ -513,7 +522,7 @@ def test_pypi_pypistats_exception():
     import httpx
 
     def side_effect(url, **kw):
-        if 'pypistats.org' in url:
+        if "pypistats.org" in url:
             raise httpx.ConnectError("timeout")
         return resp
 
@@ -570,27 +579,21 @@ def test_npm_get_info_exception():
 def test_npm_extract_github_url_string_repo():
     """NPM _extract_github_url handles string repo field."""
     client = NPMClient()
-    result = client._extract_github_url(
-        {"repository": "https://github.com/owner/repo"}
-    )
+    result = client._extract_github_url({"repository": "https://github.com/owner/repo"})
     assert result == "https://github.com/owner/repo"
 
 
 def test_npm_extract_github_url_git_protocol():
     """NPM _extract_github_url converts git:// to https://."""
     client = NPMClient()
-    result = client._extract_github_url(
-        {"repository": {"url": "git://github.com/owner/repo.git"}}
-    )
+    result = client._extract_github_url({"repository": {"url": "git://github.com/owner/repo.git"}})
     assert result == "https://github.com/owner/repo"
 
 
 def test_npm_extract_github_url_no_match():
     """NPM _extract_github_url returns None when nothing matches."""
     client = NPMClient()
-    result = client._extract_github_url(
-        {"repository": {"url": "https://gitlab.com/owner/repo"}}
-    )
+    result = client._extract_github_url({"repository": {"url": "https://gitlab.com/owner/repo"}})
     assert result is None
 
 

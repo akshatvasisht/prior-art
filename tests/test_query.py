@@ -14,10 +14,10 @@ def test_taxonomy_category_structure():
     mapper = QueryMapper()
 
     for category in mapper.categories:
-        assert hasattr(category, 'id')
-        assert hasattr(category, 'keywords')
-        assert hasattr(category, 'search_terms')
-        assert 'default' in category.search_terms
+        assert hasattr(category, "id")
+        assert hasattr(category, "keywords")
+        assert hasattr(category, "search_terms")
+        assert "default" in category.search_terms
 
 
 def test_query_mapping_http_client():
@@ -128,9 +128,9 @@ def test_no_match_response():
 
     response = mapper.get_no_match_response()
 
-    assert response['status'] == 'no_taxonomy_match'
-    assert 'message' in response
-    assert 'hint' in response
+    assert response["status"] == "no_taxonomy_match"
+    assert "message" in response
+    assert "hint" in response
 
 
 def test_category_scoring():
@@ -198,7 +198,7 @@ def test_load_bundled_taxonomy_failure():
     """QueryMapper returns empty categories when bundled taxonomy fails."""
     from unittest.mock import patch
 
-    with patch('priorart.core.query.files', side_effect=FileNotFoundError("no data")):
+    with patch("priorart.core.query.files", side_effect=FileNotFoundError("no data")):
         mapper = QueryMapper(taxonomy_path=None)
 
     assert mapper.categories == []
