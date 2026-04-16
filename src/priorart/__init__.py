@@ -6,7 +6,7 @@ informed decisions about whether to build custom solutions or use
 existing libraries.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __author__ = "Prior Art Contributors"
 
 # Export main components

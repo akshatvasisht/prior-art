@@ -10,6 +10,7 @@
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)
 ![FastMCP](https://img.shields.io/badge/FastMCP-0.5%2B-009688)
 ![Click](https://img.shields.io/badge/CLI-Click-black)
+[![PyPI](https://img.shields.io/pypi/v/priorart-agent)](https://pypi.org/project/priorart-agent/)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 priorart is a deterministic package evaluation tool for build-vs-borrow decisions. Given a natural language task description and target language, it queries package registries directly, collects quantitative signals from GitHub and deps.dev, and produces a scored recommendation based on configurable, research-informed heuristics.

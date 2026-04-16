@@ -9,6 +9,7 @@ import sys
 
 import click
 
+from . import __version__
 from .core.find_alternatives import find_alternatives
 from .core.ingest_repo import ingest_repo
 
@@ -17,7 +18,7 @@ logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
 
 @click.group()
-@click.version_option()
+@click.version_option(__version__, package_name="priorart")
 def cli() -> None:
     """priorart - Build-vs-borrow intelligence for agentic workflows.
 

@@ -11,12 +11,15 @@
 ## Installation
 
 ```bash
-# With uv (recommended)
+# From PyPI (published as `priorart-agent`; imports and CLI are still `priorart`)
+pip install priorart-agent
+
+# Or from source with uv
 git clone https://github.com/akshatvasisht/prior-art
 cd prior-art
 uv sync
 
-# Or with pip
+# Or editable install with pip
 pip install -e ".[dev]"
 
 # Verify
