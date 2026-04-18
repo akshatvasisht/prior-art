@@ -10,6 +10,7 @@ from fastmcp import FastMCP
 
 from .core.find_alternatives import find_alternatives as core_find_alternatives
 from .core.ingest_repo import ingest_repo as core_ingest_repo
+from .core.inspect import inspect_package as core_inspect_package
 
 # Set up logging
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
@@ -21,7 +22,7 @@ mcp = FastMCP("priorart")
 
 @mcp.tool()
 def find_alternatives(
-    language: str, task_description: str, explain: bool = False
+    language: str, task_description: str, explain: bool = False, lite: bool = False
 ) -> dict:  # pragma: no cover
     """Find and score open source packages for a given task.
 
@@ -36,13 +37,14 @@ def find_alternatives(
         language: Programming language (python, javascript, typescript, go, rust)
         task_description: Capability description (e.g., "http client", "jwt parser")
         explain: Include detailed scoring breakdown
+        lite: Skip the semantic index download; use live registry search instead
 
     Returns:
         Dict with status, top 5 packages (health_score, recommendation, warnings),
         and optional service_note about managed alternatives.
     """
     try:
-        return core_find_alternatives(language, task_description, explain)
+        return core_find_alternatives(language, task_description, explain, lite=lite)
     except Exception as e:
         logger.error(f"Error in find_alternatives: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
@@ -71,6 +73,32 @@ def ingest_repo(
         return core_ingest_repo(repo_url, language, category)
     except Exception as e:
         logger.error(f"Error in ingest_repo: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
+def evaluate_package(
+    package_name: str, language: str | None = None, explain: bool = False
+) -> dict:  # pragma: no cover
+    """Score a single named package without retrieval.
+
+    Use when the caller already has a candidate package name (from a blog post,
+    a chat, another agent) and wants priorart's full health + build-vs-borrow
+    evaluation for it. Skips semantic retrieval and registry search.
+
+    Args:
+        package_name: Name as it appears on the registry (e.g. "requests",
+            "@tanstack/query", "github.com/spf13/cobra", "tokio")
+        language: Optional language hint. Inferred from name shape when omitted.
+        explain: Include detailed scoring breakdown.
+
+    Returns:
+        Dict with status, single package with health_score + build-vs-borrow lens.
+    """
+    try:
+        return core_inspect_package(package_name, language, explain)
+    except Exception as e:
+        logger.error(f"Error in evaluate_package: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
 

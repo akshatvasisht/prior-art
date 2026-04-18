@@ -1,0 +1,44 @@
+name: Refresh benchmark gold standard
+
+on:
+  schedule:
+    # First of every month at 07:00 UTC (one hour after the index rebuild).
+    - cron: "0 7 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install httpx
+        run: pip install httpx
+
+      - name: Refresh awesome-list snapshots + regenerate gold standard
+        run: python bench/build_gold_standard.py --refresh
+
+      - name: Open PR if snapshots changed
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore(bench): refresh awesome-list snapshots"
+          title: "chore(bench): refresh awesome-list snapshots"
+          body: |
+            Monthly refresh of `bench/fixtures/awesome-snapshots/` and regenerated
+            `bench/fixtures/gold_standard.jsonl`.
+
+            Review the diff for category drift before merging.
+          branch: bot/refresh-gold-standard
+          delete-branch: true
+          add-paths: |
+            bench/fixtures/awesome-snapshots/**
+            bench/fixtures/gold_standard.jsonl

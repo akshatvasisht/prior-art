@@ -9,8 +9,16 @@ import logging
 from typing import Any
 
 from .ingestion import RepositoryIngester
-from .query import QueryMapper
 from .utils import load_config, validate_github_url
+
+# Default priority file patterns per language — a best-effort hint for the ingester.
+_DEFAULT_PRIORITY_FILES: dict[str, list[str]] = {
+    "python": ["README*", "*.md", "pyproject.toml", "setup.py", "setup.cfg", "src/**/__init__.py"],
+    "javascript": ["README*", "*.md", "package.json", "index.js", "src/index.js", "lib/index.js"],
+    "typescript": ["README*", "*.md", "package.json", "index.ts", "src/index.ts", "*.d.ts"],
+    "go": ["README*", "*.md", "go.mod", "doc.go", "*.go"],
+    "rust": ["README*", "*.md", "Cargo.toml", "src/lib.rs", "src/main.rs"],
+}
 
 logger = logging.getLogger(__name__)
 
@@ -64,14 +72,11 @@ def ingest_repo(
             timeout_seconds=config["ingestion"]["ingest_timeout_seconds"],
         )
 
-        # Get priority files based on language and category
+        # Get priority files based on language. The `category` parameter is accepted
+        # for backwards compatibility with MCP callers but no longer affects selection.
         priority_files = None
-        if language and category:
-            try:
-                query_mapper = QueryMapper()
-                priority_files = query_mapper.get_priority_files(category, language)
-            except Exception as e:
-                logger.warning(f"Failed to get priority files: {e}")
+        if language:
+            priority_files = _DEFAULT_PRIORITY_FILES.get(language.lower())
 
         # Ingest repository
         result = ingester.ingest(normalized_url, priority_files)

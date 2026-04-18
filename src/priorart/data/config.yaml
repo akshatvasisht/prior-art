@@ -100,7 +100,6 @@ security:
     - "NEW INSTRUCTIONS"
   # max_readme_size_bytes: not currently enforced; ingestion uses char_budget instead
 
-# Taxonomy mapping
-taxonomy:
-  confidence_threshold: 0.6              # Minimum confidence for category match
-  max_search_results: 20                 # Max candidates from registry search
+# Retrieval
+retrieval:
+  max_candidates: 20                     # Max candidates returned from semantic index or registry fallback

@@ -9,6 +9,12 @@ from click.testing import CliRunner
 from priorart.cli import cli
 
 
+@pytest.fixture(autouse=True)
+def _github_token(monkeypatch):
+    """Satisfy the `find` command's GITHUB_TOKEN requirement in tests."""
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+
+
 @pytest.fixture
 def runner():
     """Create a Click CLI runner."""
@@ -120,6 +126,15 @@ def test_cli_version(runner):
     assert "version" in result.output.lower() or "0.1.0" in result.output
 
 
+def test_find_requires_github_token(runner, monkeypatch):
+    """find should fail loudly when GITHUB_TOKEN is unset."""
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    result = runner.invoke(cli, ["find", "-l", "python", "-t", "http client"])
+
+    assert result.exit_code == 1
+    assert "GITHUB_TOKEN" in result.output
+
+
 def test_find_short_options(runner):
     """Test find command with short options."""
     mock_result = {"status": "no_match", "message": "No taxonomy match"}
@@ -127,7 +142,7 @@ def test_find_short_options(runner):
         result = runner.invoke(cli, ["find", "-l", "python", "-t", "http client"])
 
     assert result.exit_code == 0
-    mock_fn.assert_called_once_with("python", "http client", explain=False)
+    mock_fn.assert_called_once_with("python", "http client", explain=False, lite=False)
 
 
 def test_find_explain_flag(runner):
@@ -139,7 +154,17 @@ def test_find_explain_flag(runner):
         )
 
     assert result.exit_code == 0
-    mock_fn.assert_called_once_with("python", "http client", explain=True)
+    mock_fn.assert_called_once_with("python", "http client", explain=True, lite=False)
+
+
+def test_find_lite_flag(runner):
+    """--lite forwards through to find_alternatives as lite=True."""
+    mock_result = {"status": "success", "count": 0, "packages": []}
+    with patch("priorart.cli.find_alternatives", return_value=mock_result) as mock_fn:
+        result = runner.invoke(cli, ["find", "-l", "python", "-t", "http client", "--lite"])
+
+    assert result.exit_code == 0
+    mock_fn.assert_called_once_with("python", "http client", explain=False, lite=True)
 
 
 def test_cli_handles_errors_gracefully(runner):
@@ -387,3 +412,201 @@ def test_ingest_truncated_content(runner):
     assert result.exit_code == 0
     assert "truncated" in result.output
     assert "1,000 more characters" in result.output
+
+
+# --- inspect command ---
+
+
+def _mock_inspect_package(**overrides):
+    """Build a baseline inspect_package success payload."""
+    pkg = {
+        "name": "requests",
+        "full_name": "psf/requests",
+        "url": "https://github.com/psf/requests",
+        "package_name": "requests",
+        "registry": "pypi",
+        "description": "HTTP for Humans",
+        "health_score": 82,
+        "recommendation": "use_existing",
+        "identity_verified": True,
+        "age_years": 13.2,
+        "weekly_downloads": 45_000_000,
+        "license": "Apache-2.0",
+        "license_warning": False,
+        "dep_health_flag": False,
+        "likely_abandoned": False,
+        "scorecard_overall": 8.5,
+        "build_cost_weeks": 14,
+        "commodity_tag": "commodity",
+        "maintenance_liability": "low",
+    }
+    pkg.update(overrides)
+    return pkg
+
+
+def test_inspect_success_plain(runner):
+    """inspect shows the package name in plain output."""
+    mock_result = {"status": "success", "package": _mock_inspect_package()}
+    with patch("priorart.cli.inspect_package", return_value=mock_result):
+        result = runner.invoke(cli, ["inspect", "requests", "--language", "python"])
+
+    assert result.exit_code == 0
+    assert "requests" in result.output
+
+
+def test_inspect_success_json(runner):
+    """inspect --json emits parseable JSON."""
+    mock_result = {"status": "success", "package": _mock_inspect_package()}
+    with patch("priorart.cli.inspect_package", return_value=mock_result):
+        result = runner.invoke(cli, ["inspect", "requests", "--language", "python", "--json"])
+
+    assert result.exit_code == 0
+    output = json.loads(result.output)
+    assert output["status"] == "success"
+    assert output["package"]["name"] == "requests"
+
+
+def test_inspect_not_found(runner):
+    """inspect prints the message when the package is not found."""
+    mock_result = {"status": "not_found", "message": "Package does not exist"}
+    with patch("priorart.cli.inspect_package", return_value=mock_result):
+        result = runner.invoke(cli, ["inspect", "nonexistent"])
+
+    assert result.exit_code == 0
+    assert "not_found" in result.output
+    assert "Package does not exist" in result.output
+
+
+def test_inspect_error_exits_nonzero(runner):
+    """inspect exits 1 when the backend raises."""
+    with patch("priorart.cli.inspect_package", side_effect=Exception("boom")):
+        result = runner.invoke(cli, ["inspect", "requests"])
+
+    assert result.exit_code == 1
+    assert "boom" in result.output
+
+
+def test_inspect_with_explain(runner):
+    """inspect --explain surfaces score breakdown dimensions."""
+    pkg = _mock_inspect_package(
+        score_breakdown={
+            "reliability": 70,
+            "adoption": 90,
+            "versioning": 80,
+            "activity_regularity": 75,
+            "dependency_health": 85,
+        }
+    )
+    mock_result = {"status": "success", "package": pkg}
+    with patch("priorart.cli.inspect_package", return_value=mock_result):
+        result = runner.invoke(cli, ["inspect", "requests", "--explain"])
+
+    assert result.exit_code == 0
+    assert "Reliability" in result.output
+    assert "Adoption" in result.output
+    assert "Versioning" in result.output
+    assert "Activity" in result.output
+    assert "Dependencies" in result.output
+
+
+# --- _print_bvb and _print_inspect_result ---
+
+
+def test_print_inspect_result_success_no_warnings(runner):
+    """Success payload without warning flags emits no Warnings line."""
+    pkg = _mock_inspect_package(
+        license_warning=False,
+        dep_health_flag=False,
+        likely_abandoned=False,
+        commodity_tag=None,
+        build_cost_weeks=None,
+        scorecard_overall=None,
+        maintenance_liability=None,
+    )
+    mock_result = {"status": "success", "package": pkg}
+    with patch("priorart.cli.inspect_package", return_value=mock_result):
+        result = runner.invoke(cli, ["inspect", "requests"])
+
+    assert result.exit_code == 0
+    assert "Warnings:" not in result.output
+    assert "(copyleft)" not in result.output
+    assert "Build-vs-borrow" not in result.output
+
+
+def test_print_inspect_result_with_warnings(runner):
+    """Warning flags trigger the Warnings line."""
+    pkg = _mock_inspect_package(
+        license_warning=True,
+        dep_health_flag=True,
+        likely_abandoned=True,
+        identity_verified=False,
+    )
+    mock_result = {"status": "success", "package": pkg}
+    with patch("priorart.cli.inspect_package", return_value=mock_result):
+        result = runner.invoke(cli, ["inspect", "requests"])
+
+    assert result.exit_code == 0
+    assert "Warnings:" in result.output
+    assert "Identity not verified" in result.output
+    assert "Likely abandoned" in result.output
+    assert "Dependency health issues" in result.output
+    assert "(copyleft)" in result.output
+
+
+def test_print_bvb_shows_weeks_and_months(runner):
+    """Build cost >= 12 weeks renders as engineer-months."""
+    pkg = _mock_inspect_package(build_cost_weeks=26)
+    mock_result = {"status": "success", "package": pkg}
+    with patch("priorart.cli.inspect_package", return_value=mock_result):
+        result = runner.invoke(cli, ["inspect", "requests"])
+
+    assert result.exit_code == 0
+    assert "engineer-months" in result.output
+
+
+def test_print_bvb_shows_weeks_only_small(runner):
+    """Build cost < 12 weeks renders as engineer-weeks."""
+    pkg = _mock_inspect_package(build_cost_weeks=4)
+    mock_result = {"status": "success", "package": pkg}
+    with patch("priorart.cli.inspect_package", return_value=mock_result):
+        result = runner.invoke(cli, ["inspect", "requests"])
+
+    assert result.exit_code == 0
+    assert "engineer-weeks" in result.output
+    assert "engineer-months" not in result.output
+
+
+def test_print_bvb_scorecard_line(runner):
+    """Scorecard value appears in build-vs-borrow block."""
+    pkg = _mock_inspect_package(scorecard_overall=8.5)
+    mock_result = {"status": "success", "package": pkg}
+    with patch("priorart.cli.inspect_package", return_value=mock_result):
+        result = runner.invoke(cli, ["inspect", "requests"])
+
+    assert result.exit_code == 0
+    assert "8.5" in result.output
+    assert "OpenSSF Scorecard" in result.output
+
+
+def test_print_bvb_commodity_and_liability(runner):
+    """Commodity tag and maintenance liability render in output."""
+    pkg = _mock_inspect_package(commodity_tag="commodity", maintenance_liability="high")
+    mock_result = {"status": "success", "package": pkg}
+    with patch("priorart.cli.inspect_package", return_value=mock_result):
+        result = runner.invoke(cli, ["inspect", "requests"])
+
+    assert result.exit_code == 0
+    assert "commodity" in result.output
+    assert "high" in result.output
+
+
+def test_print_inspect_result_not_found(runner):
+    """not_found status avoids the BVB block."""
+    mock_result = {"status": "not_found", "message": "Package does not exist"}
+    with patch("priorart.cli.inspect_package", return_value=mock_result):
+        result = runner.invoke(cli, ["inspect", "missing"])
+
+    assert result.exit_code == 0
+    assert "Package does not exist" in result.output
+    assert "Build-vs-borrow" not in result.output
+    assert "Health Score" not in result.output

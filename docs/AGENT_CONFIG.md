@@ -1,110 +1,67 @@
-# Agent Configuration Guide
+# Agent Configuration
 
-## Decision Protocol
+Guidance for AI agents invoking the MCP tools exposed by `priorart`.
 
-### When to Call `find_alternatives`
+## `find_alternatives`
 
-**Call when:**
-- Implementing general-purpose infrastructure (http clients, parsers, databases, queues, etc.)
-- At the START of feature implementation, before writing code
-- Discovering packages in an unfamiliar ecosystem
+Invoke when:
 
-**Do NOT call when:**
-- User explicitly names a specific library ("use requests", "install axios")
-- Task is project-specific business logic
-- Already using a well-established package for the task
-- User says "just implement it" or "build it from scratch"
+- Implementing general-purpose infrastructure (HTTP clients, parsers, data stores, queues, serializers).
+- Beginning a feature in an unfamiliar ecosystem.
 
-## Interpreting Results
+Do not invoke when:
 
-### Score >= 75: `use_existing`
+- The user has named a specific library.
+- The task is project-specific business logic.
+- An established package is already in use for the same purpose.
 
-Use this package confidently. No further investigation needed.
+## Interpreting `recommendation`
+
+| Value | Score | Action |
+|---|---|---|
+| `use_existing` | ≥ 75 | Adopt without further evaluation. |
+| `evaluate` | 50–74 | Call `ingest_repo` on one or two top candidates to verify the interface. |
+| `build` | < 50 | Consider a stdlib solution or a minimal in-house implementation. Surface `likely_abandoned` and other warning flags to the user. |
+
+## `ingest_repo`
+
+Invoke when:
+
+- A candidate scored in the `evaluate` range and its public interface must be reviewed.
+- Two candidates of similar score must be compared.
+- The registry description is insufficient.
+
+Do not invoke when:
+
+- A package already scored `use_existing` or `build`.
+- Only basic metadata is required (already present in `find_alternatives` output).
+
+Ingestion clones the repository; invoke on one candidate at a time.
+
+## Warning flags
+
+| Field | Meaning | Recommended response |
+|---|---|---|
+| `identity_verified: false` | Package name and repository URL do not cross-reference; possible typosquatting. | Prefer a verified alternative; surface the warning to the user. |
+| `license_warning: true` | Copyleft license (GPL, AGPL, etc.). | Disclose obligations before adoption. |
+| `likely_abandoned: true` | No commits in the past 540 days. | Surface the warning and propose alternatives. |
+| `dep_health_flag: true` | One or more dependencies have known vulnerabilities. | Check whether a newer release resolves them. |
+
+## Usage patterns
 
 ```
-"requests" — health_score: 82, recommendation: use_existing
-→ Install and proceed.
+Confident adoption
+  find_alternatives(language="python", task_description="http client")
+  → "requests" scores 82, recommendation=use_existing
+  → adopt
+
+Evaluation
+  find_alternatives(language="python", task_description="rate limiter")
+  → "slowapi" scores 68, recommendation=evaluate
+  → ingest_repo(repo_url=...) → review interface → decide
+
+Low-signal query
+  find_alternatives returns low top-similarity
+  → request a more specific task description from the user
+  → re-invoke
 ```
-
-### Score 50-74: `evaluate`
-
-Call `ingest_repo` on the top 1-2 candidates to verify the interface fits your needs.
-
-```
-"httpx" — health_score: 72, recommendation: evaluate
-→ Call ingest_repo, review interface, then decide.
-```
-
-### Score < 50: `build`
-
-Consider building custom or using standard library. Warn user about maintenance risks.
-
-```
-"obscure-http" — health_score: 38, likely_abandoned: true
-→ Implement lightweight wrapper using stdlib instead.
-```
-
-### Service Notes
-
-Some categories return a `service_note` suggesting managed alternatives (e.g., Auth0 for authentication). Always present both options to the user.
-
-## When to Call `ingest_repo`
-
-**Use when:**
-- Package scored 50-74 (evaluate) — verify interface
-- Comparing top 2 similar candidates
-- Registry description is unclear, need full README
-
-**Don't use when:**
-- Package scored >= 75 (already confident)
-- Package scored < 50 (won't use anyway)
-- You just need basic metadata (already in `find_alternatives` output)
-
-Call on ONE candidate at a time — ingestion is expensive.
-
-## Warning Flags
-
-### `identity_verified: false`
-Possible typosquatting. Treat with extreme caution. Recommend verified alternatives.
-
-### `license_warning: true`
-Copyleft license (GPL, AGPL). Inform user about open-source obligations before proceeding.
-
-### `likely_abandoned: true`
-No commits in 540+ days. Warn user and suggest alternatives.
-
-### `dep_health_flag: true`
-Dependencies with known vulnerabilities. Check if a newer version addresses the issues.
-
-## Usage Patterns
-
-### Pattern 1: Confident Use
-```
-User: "I need HTTP requests in Python"
-1. find_alternatives(language="python", task_description="http client")
-2. requests scores 82 → use_existing
-3. Install and implement. No ingest_repo needed.
-```
-
-### Pattern 2: Evaluation
-```
-User: "I need a rate limiter"
-1. find_alternatives(language="python", task_description="rate limiter")
-2. slowapi scores 68 → evaluate
-3. ingest_repo on slowapi → review interface → proceed
-```
-
-### Pattern 3: No Match
-```
-User: "Make my app handle data better"
-1. find_alternatives returns no_taxonomy_match
-2. Ask user to be specific: "Database ORM? Data validation? Caching?"
-3. Re-call with clarified description
-```
-
-## Best Practices
-
-1. **Call early** — before writing implementation code, not after
-2. **Trust scores >= 75** — don't over-investigate strong packages
-3. **Present service notes** — always surface managed alternatives when provided
-4. **Be selective with ingestion** — only for evaluate-tier packages or direct comparisons

@@ -2,25 +2,26 @@
 
 ## General Principles
 
-### Professionalism & Tone
+### Tone
 
-* All comments and documentation use objective, technical language
-* Avoid informal language or environment-specific justifications
-* **Correct:** "Defaults to in-memory cache for faster CI execution"
-* **Incorrect:** "Using memory cache because my laptop was slow"
+Use objective, technical language. Avoid informal phrasing and environment-specific justifications.
 
-### Intent over Implementation
+- **Correct:** "Defaults to in-memory cache for faster CI execution."
+- **Incorrect:** "Using memory cache because my laptop was slow."
 
-* Comments explain *why* decisions were made, not *what* code does
-* Code should be self-documenting for the *what*
-* **Correct:** `# Blend toward neutral prior for packages <2 years old`
-* **Incorrect:** `# This line calculates the score`
+### Intent over implementation
 
-### No Meta-Commentary
+Comments explain *why*, not *what* — identifiers carry the *what*.
 
-* No internal debate traces, failed attempt logs, or editing notes in committed code
-* **Correct:** `# Use staggered requests to respect GitHub secondary rate limits`
-* **Incorrect:** `# Tried parallel requests but kept hitting rate limits`
+- **Correct:** `# Blend toward neutral prior for packages <2 years old`
+- **Incorrect:** `# This line calculates the score`
+
+### No meta-commentary
+
+No debate traces, failed-attempt logs, or editing notes in committed code.
+
+- **Correct:** `# Stagger requests to respect GitHub secondary rate limits`
+- **Incorrect:** `# Tried parallel requests but kept hitting rate limits`
 
 ---
 

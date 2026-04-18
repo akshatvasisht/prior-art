@@ -175,9 +175,8 @@ def sample_config():
             "version_graph_stability": 30,
             "dependency_health": 7,
         },
-        "taxonomy": {
-            "confidence_threshold": 0.6,
-            "max_search_results": 20,
+        "retrieval": {
+            "max_candidates": 20,
         },
         "ingestion": {
             "char_budget": 24000,

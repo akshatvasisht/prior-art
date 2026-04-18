@@ -8,13 +8,14 @@ Implements two-pass ingestion:
 
 import logging
 import re
+import shutil
+import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
 
 import yaml
-from git import GitCommandError, Repo
 
 from .ast_extract import InterfaceExtractor
 
@@ -180,13 +181,23 @@ class RepositoryIngester:
         repo_path = Path(temp_dir) / "repo"
 
         try:
-            # Shallow clone; no submodule recursion (submodules could reference arbitrary URLs)
-            Repo.clone_from(
-                url,
-                repo_path,
-                depth=1,
+            # Shallow clone; no submodule recursion (submodules could reference arbitrary URLs).
+            # GitPython's Repo.clone_from forwards `timeout=` as a bogus CLI flag, so we shell out
+            # to git directly and enforce the wall-clock timeout via subprocess.
+            subprocess.run(
+                [
+                    "git",
+                    "clone",
+                    "--depth=1",
+                    "--no-recurse-submodules",
+                    "--",
+                    url,
+                    str(repo_path),
+                ],
                 timeout=self.timeout_seconds,
-                multi_options=["--no-recurse-submodules"],
+                check=True,
+                capture_output=True,
+                text=True,
             )
 
             # Check size
@@ -196,8 +207,15 @@ class RepositoryIngester:
 
             return repo_path
 
-        except GitCommandError as e:
-            raise RuntimeError(f"Git clone failed: {e}") from e
+        except subprocess.TimeoutExpired as e:
+            if repo_path.exists():
+                shutil.rmtree(repo_path, ignore_errors=True)
+            raise RuntimeError(f"Git clone timed out after {self.timeout_seconds}s") from e
+        except subprocess.CalledProcessError as e:
+            if repo_path.exists():
+                shutil.rmtree(repo_path, ignore_errors=True)
+            stderr = (e.stderr or "").strip()
+            raise RuntimeError(f"Git clone failed: {stderr or e}") from e
 
     def _get_dir_size(self, path: Path) -> int:  # pragma: no cover
         """Get directory size in bytes."""

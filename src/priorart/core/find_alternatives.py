@@ -16,19 +16,21 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+from .build_cost import enrich_build_vs_borrow
 from .cache import SignalSnapshot, SQLiteCache
-from .deps_dev import DepsDevClient
+from .deps_dev import DepsDevClient, DepsDevData
 from .github_client import GitHubClient
-from .query import QueryMapper
-from .registry import PackageCandidate, get_registry_client
-from .scoring import PackageScorer
-from .utils import load_config
+from .registry import PackageCandidate
+from .retrieval import retrieve_candidates
+from .scorecard_client import ScorecardClient
+from .scoring import PackageScorer, ScoredPackage
+from .utils import load_config, parse_github_url
 
 logger = logging.getLogger(__name__)
 
 
 def find_alternatives(
-    language: str, task_description: str, explain: bool = False
+    language: str, task_description: str, explain: bool = False, lite: bool = False
 ) -> dict[str, Any]:
     """Find alternative packages for a given task.
 
@@ -59,25 +61,17 @@ def find_alternatives(
 
         # Initialize components
         cache = SQLiteCache()
-        query_mapper = QueryMapper(confidence_threshold=config["taxonomy"]["confidence_threshold"])
         scorer = PackageScorer(config)
 
-        # Step 1: Map task description to search query
-        query_result = query_mapper.map_query(task_description, language)
-
-        if not query_result.matched:
-            return query_mapper.get_no_match_response()
-
-        # Step 2: Search registry
-        max_results = config["taxonomy"]["max_search_results"]
-        with get_registry_client(language) as registry_client:
-            candidates = registry_client.search(query_result.search_query, max_results)
+        max_results = config["retrieval"]["max_candidates"]
+        candidates = retrieve_candidates(task_description, language, max_results, lite=lite)
+        service_note: str | None = None
 
         if not candidates:
             return {
                 "status": "no_results",
-                "message": f"No packages found matching '{query_result.search_query}'",
-                "service_note": query_result.service_note,
+                "message": f"No packages found matching '{task_description}'",
+                "service_note": service_note,
             }
 
         # Step 3: Collect detailed package data
@@ -86,7 +80,7 @@ def find_alternatives(
         for candidate in candidates:
             try:
                 package_data = _collect_package_signals(
-                    candidate, language, cache, config, query_result.service_note
+                    candidate, language, cache, config, service_note
                 )
 
                 if package_data:
@@ -100,7 +94,7 @@ def find_alternatives(
             return {
                 "status": "no_results",
                 "message": "No packages met the minimum quality thresholds",
-                "service_note": query_result.service_note,
+                "service_note": service_note,
             }
 
         # Step 4: Apply floor filter
@@ -110,17 +104,21 @@ def find_alternatives(
             return {
                 "status": "below_threshold",
                 "message": "All candidates were below minimum download/star thresholds",
-                "service_note": query_result.service_note,
+                "service_note": service_note,
             }
 
-        # Step 5: Score packages
+        # Step 5: Score packages + enrich with build-vs-borrow lens
         scored_packages = []
         for pkg_data in filtered:
             try:
                 scored_pkg = scorer.score_package(pkg_data, explain=explain)
+                enrich_build_vs_borrow(scored_pkg, pkg_data)
                 scored_packages.append(scored_pkg)
             except Exception as e:
-                logger.warning(f"Failed to score package {pkg_data.get('name')}: {e}")
+                logger.warning(
+                    f"Failed to score package {pkg_data.get('name')}: {e}",
+                    exc_info=True,
+                )
                 continue
 
         # Step 6: Sort by health score and return top 5
@@ -146,6 +144,10 @@ def find_alternatives(
                 "license_warning": pkg.license_warning,
                 "dep_health_flag": pkg.dep_health_flag,
                 "likely_abandoned": pkg.likely_abandoned,
+                "scorecard_overall": pkg.scorecard_overall,
+                "build_cost_weeks": pkg.build_cost_weeks,
+                "commodity_tag": pkg.commodity_tag,
+                "maintenance_liability": pkg.maintenance_liability,
             }
 
             if explain and pkg.score_breakdown:
@@ -168,7 +170,7 @@ def find_alternatives(
             "status": "success",
             "count": len(results),
             "packages": results,
-            "service_note": query_result.service_note,
+            "service_note": service_note,
         }
 
     except Exception as e:
@@ -286,6 +288,9 @@ def _collect_package_signals(
                 "vulnerable_dep_count": snapshot.vulnerable_dep_count,
                 "deprecated_dep_count": snapshot.deprecated_dep_count,
                 "reverse_dep_count": snapshot.reverse_dep_count,
+                "scorecard_overall": snapshot.scorecard_overall,
+                "scorecard_reliability_bucket": snapshot.scorecard_reliability_bucket,
+                "scorecard_dep_health_bucket": snapshot.scorecard_dep_health_bucket,
             }
         )
     else:
@@ -373,6 +378,12 @@ def _fetch_fresh_signals(
                 }
             )
 
+            latest_published = _latest_stable_published_at(deps_data)
+            if latest_published is not None:
+                signals["days_since_compatible_release"] = (
+                    datetime.now(timezone.utc) - latest_published
+                ).days
+
             if deps_data.dependency_info:
                 signals.update(
                     {
@@ -389,7 +400,58 @@ def _fetch_fresh_signals(
     if candidate.weekly_downloads:
         signals["weekly_downloads"] = candidate.weekly_downloads
 
+    # OpenSSF Scorecard (optional, public, no auth)
+    parsed = parse_github_url(github_url)
+    if parsed:
+        owner, repo = parsed
+        try:
+            with ScorecardClient() as sc:
+                result = sc.fetch(owner, repo)
+            if result.available:
+                signals["scorecard_overall"] = result.overall_score
+                signals["scorecard_reliability_bucket"] = result.reliability_bucket
+                signals["scorecard_dep_health_bucket"] = result.dep_health_bucket
+        except Exception as e:
+            logger.info(f"Scorecard fetch skipped for {candidate.name}: {e}")
+
     return signals
+
+
+def _latest_stable_published_at(deps_data: DepsDevData) -> datetime | None:
+    """Publish date of the latest stable, dated, non-yanked version, if any."""
+    if not deps_data.latest_version:
+        return None
+    versions = deps_data.versions
+    if not isinstance(versions, list):
+        return None
+    for v in versions:
+        if getattr(v, "version", None) == deps_data.latest_version:
+            pub = getattr(v, "published_at", None)
+            if pub is not None:
+                return pub
+    return None
+
+
+def evaluate_candidate(
+    candidate: PackageCandidate,
+    language: str,
+    cache: SQLiteCache,
+    config: dict[str, Any],
+    scorer: PackageScorer,
+    explain: bool = False,
+    service_note: str | None = None,
+) -> ScoredPackage | None:
+    """Collect signals + score a single candidate. Returns None if GitHub URL missing."""
+    package_data = _collect_package_signals(candidate, language, cache, config, service_note)
+    if not package_data:
+        return None
+    try:
+        scored = scorer.score_package(package_data, explain=explain)
+        enrich_build_vs_borrow(scored, package_data)
+        return scored
+    except Exception as e:
+        logger.warning(f"Failed to score {candidate.name}: {e}", exc_info=True)
+        return None
 
 
 def _save_to_cache(
@@ -427,6 +489,9 @@ def _save_to_cache(
         vulnerable_dep_count=package_data.get("vulnerable_dep_count"),
         deprecated_dep_count=package_data.get("deprecated_dep_count"),
         reverse_dep_count=package_data.get("reverse_dep_count"),
+        scorecard_overall=package_data.get("scorecard_overall"),
+        scorecard_reliability_bucket=package_data.get("scorecard_reliability_bucket"),
+        scorecard_dep_health_bucket=package_data.get("scorecard_dep_health_bucket"),
         description=package_data.get("description"),
         license=package_data.get("license"),
     )

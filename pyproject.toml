@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "priorart-agent"
-version = "0.1.1"
+version = "0.2.0"
 description = "Build-vs-borrow intelligence for agentic workflows - helps AI agents discover and evaluate open source packages"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,6 +34,12 @@ dependencies = [
     "PyGithub>=2.1.0",
     "packaging>=23.0",
     "gitpython>=3.1.30",        # CVE-2022-24439 (command injection via crafted URL) fixed in 3.1.30
+    # v0.2 semantic index — HF download + sigstore verify + ONNX embedding + HNSW search
+    "huggingface_hub>=0.20",
+    "sigstore>=3.0",
+    "fastembed>=0.3",
+    "usearch>=2.12",
+    "numpy>=1.24",
 ]
 
 [project.optional-dependencies]
@@ -42,6 +48,9 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0",
     "pytest-cov>=4.0",
+]
+index-build = [
+    "google-cloud-bigquery>=3.0",
 ]
 
 [project.scripts]
@@ -64,6 +73,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 priorart = [
     "data/*.yaml",
+    "data/*.yml",
 ]
 
 # Tool configurations

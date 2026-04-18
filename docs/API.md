@@ -23,6 +23,7 @@ result = find_alternatives(
 | `language` | `str` | Yes | `"python"`, `"javascript"`, `"typescript"`, `"rust"`, `"go"` |
 | `task_description` | `str` | Yes | Natural language task description (e.g., "http client", "rate limiter") |
 | `explain` | `bool` | No | Include per-dimension score breakdowns (default: `False`) |
+| `lite` | `bool` | No | Skip the semantic index download; use live registry search instead (default: `False`) |
 
 **Returns:** `dict`
 
@@ -63,10 +64,35 @@ result = find_alternatives(
 **Error Responses:**
 
 ```python
-{"status": "no_taxonomy_match", "message": "...", "hint": "Pass a concrete noun..."}
 {"status": "no_results", "message": "No packages found matching '...'"}
 {"status": "below_threshold", "message": "All candidates were below minimum download/star thresholds"}
 ```
+
+---
+
+### `inspect_package()`
+
+Score a single named package without retrieval.
+
+```python
+from priorart import inspect_package
+
+result = inspect_package(
+    package_name="requests",
+    language="python",   # Optional; inferred from name shape when omitted
+    explain=False,
+)
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `package_name` | `str` | Yes | Name as it appears on the registry (e.g. `"requests"`, `"@tanstack/query"`, `"github.com/spf13/cobra"`, `"tokio"`) |
+| `language` | `str` | No | Language hint; inferred from name shape when omitted |
+| `explain` | `bool` | No | Include per-dimension score breakdowns (default: `False`) |
+
+**Returns:** `{"status": "success", "package": {...}}`, where `package` has the same schema as an entry in `find_alternatives.packages`.
 
 ---
 
@@ -121,6 +147,20 @@ priorart find --language LANG --task "DESCRIPTION" [OPTIONS]
 | `--task` | `-t` | Task description | Required |
 | `--explain` | | Show dimension scores | `false` |
 | `--json` | | Output JSON | `false` |
+| `--lite` | | Skip the 120MB index download; use registry search | `false` |
+
+### `priorart inspect`
+
+```bash
+priorart inspect PACKAGE_NAME [OPTIONS]
+```
+
+| Flag | Short | Description | Default |
+|------|-------|-------------|---------|
+| `--language` | `-l` | Language hint (inferred from name shape when omitted) | Optional |
+| `--explain` | `-e` | Show dimension scores | `false` |
+| `--json` | | Output JSON | `false` |
+| `--verbose` | `-v` | Verbose logging | `false` |
 
 ### `priorart ingest`
 
@@ -131,7 +171,7 @@ priorart ingest REPO_URL [OPTIONS]
 | Flag | Short | Description | Default |
 |------|-------|-------------|---------|
 | `--language` | `-l` | Target language | Optional |
-| `--category` | `-c` | Package category | Optional |
+| `--category` | `-c` | Accepted for back-compat; no longer affects file prioritization | Optional |
 | `--json` | | Output JSON | `false` |
 | `--verbose` | `-v` | Verbose logging | `false` |
 
@@ -155,10 +195,11 @@ priorart cache-clear
 
 ## MCP Server
 
-The MCP server exposes `find_alternatives` and `ingest_repo` as tools with the same parameters and return values as the Python API.
+The MCP server exposes `find_alternatives`, `evaluate_package`, and `ingest_repo` as tools with the same parameters and return values as the Python API. (`evaluate_package` is the MCP-side name for `inspect_package`.)
 
 ```json
-{"language": "python", "task_description": "http client", "explain": false}
+{"language": "python", "task_description": "http client", "explain": false, "lite": false}
+{"package_name": "requests", "language": "python"}
 {"repo_url": "https://github.com/psf/requests", "language": "python"}
 ```
 

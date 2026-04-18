@@ -231,3 +231,73 @@ def test_cache_get_invalid_datetime_in_db(temp_cache_dir):
     retrieved = cache.get("bad-dt", "pypi")
     assert retrieved is not None
     assert retrieved.downloads_refreshed_at is None
+
+
+def test_conn_rolls_back_on_exception(temp_cache_dir, sample_package_snapshot):
+    """_conn() rolls back the connection when the body raises."""
+    import pytest
+
+    cache = SQLiteCache(temp_cache_dir)
+    cache.set(sample_package_snapshot)
+
+    # Raise inside the _conn() block after a partial write — rollback should
+    # undo the in-flight write and the exception should propagate.
+    with pytest.raises(RuntimeError, match="boom"):
+        with cache._conn() as conn:
+            conn.execute(
+                "UPDATE package_signals SET star_count = ? WHERE package_name = ?",
+                (999999, "requests"),
+            )
+            raise RuntimeError("boom")
+
+    # Partial update must not be visible after rollback
+    retrieved = cache.get("requests", "pypi")
+    assert retrieved is not None
+    assert retrieved.star_count == 50000
+
+
+def test_close_drains_pool(temp_cache_dir):
+    """close() removes all connections from the pool."""
+    cache = SQLiteCache(temp_cache_dir, pool_size=3)
+    assert cache._pool.qsize() == 3
+
+    cache.close()
+
+    assert cache._pool.empty()
+
+
+def test_additive_migration_adds_missing_columns(temp_cache_dir):
+    """Opening a DB missing scorecard_* columns adds them via ALTER TABLE."""
+    import sqlite3
+
+    db_path = temp_cache_dir / "cache.db"
+
+    # Create bare schema missing the scorecard_* columns
+    with sqlite3.connect(db_path, timeout=10) as conn:
+        conn.execute(
+            """
+            CREATE TABLE package_signals (
+                package_name TEXT NOT NULL,
+                registry TEXT NOT NULL,
+                github_url TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (package_name, registry)
+            )
+            """
+        )
+
+    # Verify scorecard_overall not present before migration
+    with sqlite3.connect(db_path, timeout=10) as conn:
+        cols_before = {row[1] for row in conn.execute("PRAGMA table_info(package_signals)")}
+    assert "scorecard_overall" not in cols_before
+
+    # Instantiate SQLiteCache — triggers additive migration
+    SQLiteCache(temp_cache_dir)
+
+    with sqlite3.connect(db_path, timeout=10) as conn:
+        cols_after = {row[1] for row in conn.execute("PRAGMA table_info(package_signals)")}
+
+    assert "scorecard_overall" in cols_after
+    assert "scorecard_reliability_bucket" in cols_after
+    assert "scorecard_dep_health_bucket" in cols_after

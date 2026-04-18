@@ -125,15 +125,14 @@ def test_success_content_warnings(mock_load_config, mock_ingester_cls):
 
 
 # ---------------------------------------------------------------------------
-# Language + category (QueryMapper path)
+# Language-hinted priority files (taxonomy-free default map)
 # ---------------------------------------------------------------------------
 
 
-@patch("priorart.core.ingest_repo.QueryMapper")
 @patch("priorart.core.ingest_repo.RepositoryIngester")
 @patch("priorart.core.ingest_repo.load_config")
-def test_success_with_language_and_category(mock_load_config, mock_ingester_cls, mock_qm_cls):
-    """When language+category provided, QueryMapper supplies priority_files."""
+def test_success_with_language_hint(mock_load_config, mock_ingester_cls):
+    """Language hint supplies default priority_files from the inline map."""
     mock_load_config.return_value = {
         "ingestion": {
             "char_budget": 50_000,
@@ -141,28 +140,22 @@ def test_success_with_language_and_category(mock_load_config, mock_ingester_cls,
             "ingest_timeout_seconds": 60,
         }
     }
-    mock_qm_cls.return_value.get_priority_files.return_value = [
-        "src/**/*.py",
-        "setup.py",
-    ]
     mock_ingester_cls.return_value.ingest.return_value = _make_result()
 
-    result = ingest_repo(VALID_URL, language="python", category="http-client")
+    result = ingest_repo(VALID_URL, language="python")
 
     assert result["status"] == "success"
-    mock_qm_cls.return_value.get_priority_files.assert_called_once_with("http-client", "python")
-    mock_ingester_cls.return_value.ingest.assert_called_once_with(
-        "https://github.com/psf/requests", ["src/**/*.py", "setup.py"]
-    )
+    call_args = mock_ingester_cls.return_value.ingest.call_args
+    assert call_args.args[0] == "https://github.com/psf/requests"
+    priority_files = call_args.args[1]
+    assert priority_files is not None
+    assert "pyproject.toml" in priority_files
 
 
-@patch("priorart.core.ingest_repo.QueryMapper")
 @patch("priorart.core.ingest_repo.RepositoryIngester")
 @patch("priorart.core.ingest_repo.load_config")
-def test_query_mapper_failure_falls_back_gracefully(
-    mock_load_config, mock_ingester_cls, mock_qm_cls
-):
-    """If QueryMapper raises, priority_files stays None and ingestion proceeds."""
+def test_unknown_language_falls_back_to_none(mock_load_config, mock_ingester_cls):
+    """Unknown language leaves priority_files as None, and ingestion proceeds."""
     mock_load_config.return_value = {
         "ingestion": {
             "char_budget": 50_000,
@@ -170,13 +163,11 @@ def test_query_mapper_failure_falls_back_gracefully(
             "ingest_timeout_seconds": 60,
         }
     }
-    mock_qm_cls.return_value.get_priority_files.side_effect = KeyError("unknown category")
     mock_ingester_cls.return_value.ingest.return_value = _make_result()
 
-    result = ingest_repo(VALID_URL, language="python", category="nonexistent")
+    result = ingest_repo(VALID_URL, language="cobol")
 
     assert result["status"] == "success"
-    # priority_files should be None because the exception was caught
     mock_ingester_cls.return_value.ingest.assert_called_once_with(
         "https://github.com/psf/requests", None
     )

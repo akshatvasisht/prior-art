@@ -12,9 +12,34 @@ import click
 from . import __version__
 from .core.find_alternatives import find_alternatives
 from .core.ingest_repo import ingest_repo
+from .core.inspect import inspect_package
 
 # Set up logging
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+
+
+def _require_github_token() -> None:
+    """Exit with a clear error if GITHUB_TOKEN is not set.
+
+    Registry-only signals cannot clear the floor filter, so in practice the
+    tool returns nothing useful without a token. Fail loudly rather than
+    silently degrade.
+    """
+    if not os.environ.get("GITHUB_TOKEN"):
+        click.echo(
+            "Error: GITHUB_TOKEN is required.\n"
+            "\n"
+            "priorart needs a GitHub personal access token to score packages.\n"
+            "Without it, nearly every query falls below the floor filter.\n"
+            "\n"
+            "Create a token (scope: public_repo) at:\n"
+            "  https://github.com/settings/tokens\n"
+            "\n"
+            "Then export it:\n"
+            "  export GITHUB_TOKEN=ghp_...",
+            err=True,
+        )
+        sys.exit(1)
 
 
 @click.group()
@@ -43,7 +68,14 @@ def cli() -> None:
 @click.option("--explain", "-e", is_flag=True, help="Include detailed scoring breakdown")
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
-def find(language: str, task: str, explain: bool, output_json: bool, verbose: bool) -> None:
+@click.option(
+    "--lite",
+    is_flag=True,
+    help="Skip the semantic index download; use live registry search instead",
+)
+def find(
+    language: str, task: str, explain: bool, output_json: bool, verbose: bool, lite: bool
+) -> None:
     """Find alternative packages for a given task.
 
     Args:
@@ -61,8 +93,10 @@ def find(language: str, task: str, explain: bool, output_json: bool, verbose: bo
     if verbose:  # pragma: no cover
         logging.getLogger().setLevel(logging.INFO)
 
+    _require_github_token()
+
     try:
-        result = find_alternatives(language, task, explain=explain)
+        result = find_alternatives(language, task, explain=explain, lite=lite)
 
         if output_json:
             click.echo(json.dumps(result, indent=2))
@@ -112,6 +146,51 @@ def ingest(
         else:
             _print_ingest_results(result)
 
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("package_name")
+@click.option(
+    "--language",
+    "-l",
+    type=click.Choice(["python", "javascript", "typescript", "go", "rust"], case_sensitive=False),
+    help="Language hint (inferred from package name shape when omitted)",
+)
+@click.option("--explain", "-e", is_flag=True, help="Include detailed scoring breakdown")
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+@click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
+def inspect(
+    package_name: str,
+    language: str | None,
+    explain: bool,
+    output_json: bool,
+    verbose: bool,
+) -> None:
+    """Evaluate a single named package without retrieval.
+
+    Runs the full signal pipeline (registry, GitHub, deps.dev, Scorecard)
+    + 5-dimension scoring + build-vs-borrow lens on one package.
+
+    Examples:
+      priorart inspect requests
+      priorart inspect @tanstack/query --language javascript
+      priorart inspect github.com/spf13/cobra --language go
+      priorart inspect tokio --language rust --explain
+    """
+    if verbose:  # pragma: no cover
+        logging.getLogger().setLevel(logging.INFO)
+
+    _require_github_token()
+
+    try:
+        result = inspect_package(package_name, language, explain=explain)
+        if output_json:
+            click.echo(json.dumps(result, indent=2))
+        else:
+            _print_inspect_result(result)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -205,6 +284,74 @@ def seed_generate(limit: int) -> None:  # pragma: no cover
         sys.exit(1)
 
 
+def _print_bvb(pkg: dict) -> None:
+    """Render the build-vs-borrow lens for a single package."""
+    weeks = pkg.get("build_cost_weeks")
+    tag = pkg.get("commodity_tag")
+    liability = pkg.get("maintenance_liability")
+    sc = pkg.get("scorecard_overall")
+    if not any((weeks, tag, liability, sc)):
+        return
+    click.echo("   Build-vs-borrow:")
+    if weeks is not None:
+        if weeks >= 12:
+            estimate = f"~{weeks / 4.33:.1f} engineer-months"
+        else:
+            estimate = f"~{weeks:.1f} engineer-weeks"
+        click.echo(f"     - Build cost: {estimate} (estimate)")
+    if tag:
+        click.echo(f"     - Category: {tag}")
+    if liability:
+        click.echo(f"     - Maintenance liability: {liability}")
+    if sc is not None:
+        click.echo(f"     - OpenSSF Scorecard: {sc:.1f}/10")
+
+
+def _print_inspect_result(result: dict) -> None:
+    """Print inspect_package result in human-readable form."""
+    status = result.get("status")
+    if status != "success":
+        _print_non_success(result)
+        return
+
+    pkg = result["package"]
+    click.echo(f"\n{pkg['name']} ({pkg['registry']})")
+    click.echo(f"URL: {pkg['url']}")
+    if pkg.get("description"):
+        click.echo(f"Description: {pkg['description']}")
+    click.echo(f"Health Score: {pkg['health_score']}/100")
+    click.echo(f"Recommendation: {pkg['recommendation']}")
+    if pkg.get("weekly_downloads"):
+        click.echo(f"Weekly Downloads: {pkg['weekly_downloads']:,}")
+    if pkg.get("license"):
+        license_str = pkg["license"]
+        if pkg.get("license_warning"):
+            license_str += " (copyleft)"
+        click.echo(f"License: {license_str}")
+
+    warnings = []
+    if not pkg.get("identity_verified"):
+        warnings.append("Identity not verified")
+    if pkg.get("likely_abandoned"):
+        warnings.append("Likely abandoned")
+    if pkg.get("dep_health_flag"):
+        warnings.append("Dependency health issues")
+    if warnings:
+        click.echo(f"Warnings: {', '.join(warnings)}")
+
+    click.echo()
+    _print_bvb(pkg)
+
+    if pkg.get("score_breakdown"):
+        breakdown = pkg["score_breakdown"]
+        click.echo("\n   Score Breakdown:")
+        click.echo(f"     Reliability: {breakdown['reliability']}")
+        click.echo(f"     Adoption: {breakdown['adoption']}")
+        click.echo(f"     Versioning: {breakdown['versioning']}")
+        click.echo(f"     Activity: {breakdown['activity_regularity']}")
+        click.echo(f"     Dependencies: {breakdown['dependency_health']}")
+
+
 def _print_non_success(result: dict) -> None:
     """Print status and message for any non-success response."""
     click.echo(f"Status: {result.get('status')}")
@@ -262,6 +409,8 @@ def _print_find_results(result: dict) -> None:
 
         if warnings:
             click.echo(f"   Warnings: {', '.join(warnings)}")
+
+        _print_bvb(pkg)
 
         # Score breakdown if available
         if pkg.get("score_breakdown"):

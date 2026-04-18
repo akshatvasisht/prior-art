@@ -8,9 +8,11 @@ Uses SQLite for local persistent storage with parameterized queries for security
 import dataclasses
 import logging
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from queue import Empty, Queue
 from typing import Any
 
 from platformdirs import user_cache_dir
@@ -67,6 +69,11 @@ class SignalSnapshot:
     reverse_dep_count: int | None = None
     dep_health_refreshed_at: datetime | None = None
 
+    # OpenSSF Scorecard (weekly freshness — reuse dep_health window)
+    scorecard_overall: float | None = None
+    scorecard_reliability_bucket: float | None = None
+    scorecard_dep_health_bucket: float | None = None
+
     # Metadata
     description: str | None = None
     license: str | None = None
@@ -105,11 +112,12 @@ _SIGNAL_SNAPSHOT_FIELDS: frozenset = frozenset(f.name for f in dataclasses.field
 class SQLiteCache:
     """SQLite implementation of cache backend with parameterized queries."""
 
-    def __init__(self, cache_dir: Path | None = None):
+    def __init__(self, cache_dir: Path | None = None, pool_size: int = 4):
         """Initialize SQLite cache.
 
         Args:
             cache_dir: Directory for cache database. Defaults to platformdirs location.
+            pool_size: Number of pooled connections for concurrent MCP load.
         """
         if cache_dir is None:  # pragma: no cover
             cache_dir = Path(user_cache_dir("priorart"))
@@ -117,6 +125,45 @@ class SQLiteCache:
         cache_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = cache_dir / "cache.db"
         self._init_database()
+
+        # Connection pool — reduces connect() overhead under MCP concurrency.
+        # check_same_thread=False is safe because the pool hands out each
+        # connection to one caller at a time, and SQLite serializes writes.
+        self._pool: Queue[sqlite3.Connection] = Queue(maxsize=pool_size)
+        for _ in range(pool_size):
+            conn = sqlite3.connect(self.db_path, timeout=10, check_same_thread=False)
+            self._pool.put(conn)
+
+    @contextmanager
+    def _conn(self):
+        """Borrow a pooled connection. Blocks briefly if all are in use."""
+        try:
+            conn = self._pool.get(timeout=10)
+        except Empty:  # pragma: no cover
+            # Fallback: spin up a one-shot connection if the pool is exhausted
+            conn = sqlite3.connect(self.db_path, timeout=10, check_same_thread=False)
+            try:
+                yield conn
+            finally:
+                conn.close()
+            return
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            self._pool.put(conn)
+
+    def close(self) -> None:
+        """Close all pooled connections."""
+        while not self._pool.empty():
+            try:
+                conn = self._pool.get_nowait()
+                conn.close()
+            except Empty:  # pragma: no cover
+                break
 
     def _init_database(self):
         """Create database schema if not exists."""
@@ -168,6 +215,11 @@ class SQLiteCache:
                     reverse_dep_count INTEGER,
                     dep_health_refreshed_at TEXT,
 
+                    -- OpenSSF Scorecard (reuse dep_health freshness)
+                    scorecard_overall REAL,
+                    scorecard_reliability_bucket REAL,
+                    scorecard_dep_health_bucket REAL,
+
                     -- Metadata
                     description TEXT,
                     license TEXT,
@@ -181,9 +233,19 @@ class SQLiteCache:
             # Enable WAL mode for concurrent reads
             conn.execute("PRAGMA journal_mode=WAL")
 
+            # Additive migrations — columns added after initial schema
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(package_signals)")}
+            for col, sql_type in (
+                ("scorecard_overall", "REAL"),
+                ("scorecard_reliability_bucket", "REAL"),
+                ("scorecard_dep_health_bucket", "REAL"),
+            ):
+                if col not in existing:
+                    conn.execute(f"ALTER TABLE package_signals ADD COLUMN {col} {sql_type}")
+
     def get(self, package_name: str, registry: str) -> SignalSnapshot | None:
         """Retrieve package snapshot using parameterized query."""
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
+        with self._conn() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
                 "SELECT * FROM package_signals WHERE package_name = ? AND registry = ?",
@@ -230,7 +292,7 @@ class SQLiteCache:
             if isinstance(value, datetime):
                 data[key] = value.isoformat()
 
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
+        with self._conn() as conn:
             # Use REPLACE to insert or update
             placeholders = ", ".join(["?"] * len(data))
             columns = ", ".join(data.keys())
@@ -245,7 +307,7 @@ class SQLiteCache:
 
     def exists(self, package_name: str, registry: str) -> bool:
         """Check if package exists in cache."""
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
+        with self._conn() as conn:
             cursor = conn.execute(
                 "SELECT COUNT(*) FROM package_signals WHERE package_name = ? AND registry = ?",
                 (package_name, registry),
@@ -256,7 +318,7 @@ class SQLiteCache:
         """Remove entries older than max_age_days."""
         cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
 
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
+        with self._conn() as conn:
             cursor = conn.execute(
                 "DELETE FROM package_signals WHERE updated_at < ?", (cutoff.isoformat(),)
             )
@@ -278,7 +340,7 @@ class SQLiteCache:
         set_clause = ", ".join([f"{k} = ?" for k in signals.keys()])
         values = list(signals.values())
 
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
+        with self._conn() as conn:
             conn.execute(
                 f"""
                 UPDATE package_signals

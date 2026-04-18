@@ -73,6 +73,14 @@ class ScoredPackage:
     service_note: str | None = None
     identity_verified: bool = True
 
+    # Scorecard signals (optional)
+    scorecard_overall: float | None = None
+
+    # Build-vs-borrow lens (optional)
+    build_cost_weeks: float | None = None
+    commodity_tag: str | None = None  # "commodity" | "differentiator"
+    maintenance_liability: str | None = None  # "low" | "medium" | "high"
+
 
 class PackageScorer:
     """Scores packages based on health signals."""
@@ -242,6 +250,7 @@ class PackageScorer:
             recommendation=recommendation,
             service_note=package_data.get("service_note"),
             identity_verified=package_data.get("identity_verified", True),
+            scorecard_overall=package_data.get("scorecard_overall"),
         )
 
     def _score_reliability(self, data: dict[str, Any]) -> tuple[float, dict[str, Any]]:
@@ -291,6 +300,12 @@ class PackageScorer:
             "consistency_score": consistency_score,
         }
 
+        # Blend with OpenSSF Scorecard reliability bucket if available (30% weight)
+        sc_reliability = data.get("scorecard_reliability_bucket")
+        if sc_reliability is not None:
+            reliability_score = 0.7 * reliability_score + 0.3 * sc_reliability
+            details["scorecard_reliability_bucket"] = sc_reliability
+
         return reliability_score, details
 
     def _score_adoption(self, data: dict[str, Any]) -> tuple[float, dict[str, Any]]:
@@ -304,25 +319,25 @@ class PackageScorer:
         """
         language = data.get("language", "default")
 
-        # Fork-to-star ratio
-        fsr = data.get("fork_to_star_ratio", 0)
+        # Fork-to-star ratio (may be None when GitHub signals are missing)
+        fsr = data.get("fork_to_star_ratio") or 0
         fsr_reference = self.adoption_config["fsr_reference"].get(
             language.lower(), self.adoption_config["fsr_reference"]["default"]
         )
         fsr_score = min(fsr / fsr_reference, 1.0) if fsr_reference > 0 else 0.0
 
         # Saturation at 10M/week (~top 0.01% of ecosystem); 0 when unavailable (PyPI fallback to stars)
-        weekly_downloads = data.get("weekly_downloads", 0) or 0
+        weekly_downloads = data.get("weekly_downloads") or 0
         dl_saturation = 10_000_000
         dl_score = min(math.log(1 + weekly_downloads) / math.log(1 + dl_saturation), 1.0)
 
         # Recent committers
-        committers = data.get("recent_committer_count", 0)
+        committers = data.get("recent_committer_count") or 0
         committer_saturation = self.adoption_config["committer_saturation"]
         committer_score = min(committers / committer_saturation, 1.0)
 
         # Reverse dependencies
-        revdeps = data.get("reverse_dep_count", 0)
+        revdeps = data.get("reverse_dep_count") or 0
         revdep_saturation = self.adoption_config["revdep_saturation"]
         revdep_score = min(math.log(1 + revdeps) / math.log(1 + revdep_saturation), 1.0)
 
@@ -352,8 +367,10 @@ class PackageScorer:
         Returns:
             Tuple of (score, details)
         """
-        # Recency of compatible version
-        days_since_release = data.get("days_since_compatible_release", 365)
+        # Recency of compatible version (fall back to 365 days if missing or None)
+        days_since_release = data.get("days_since_compatible_release")
+        if days_since_release is None:
+            days_since_release = 365
         halflife = self.versioning_config["recency_halflife_days"]
         recency_score = 1.0 / (1.0 + days_since_release / halflife)
 
@@ -363,11 +380,13 @@ class PackageScorer:
             is_current = self.versioning_config["is_current_partial_score"]
 
         # Release regularity
-        release_cv = data.get("release_cv", 1.0)
+        release_cv = data.get("release_cv")
+        if release_cv is None:
+            release_cv = 1.0
         regularity_score = 1.0 / (1.0 + release_cv)
 
         # API stability
-        major_versions_per_year = data.get("major_versions_per_year", 0)
+        major_versions_per_year = data.get("major_versions_per_year") or 0
         stability_score = 1.0 / (1.0 + major_versions_per_year)
 
         # Combined versioning score
@@ -416,9 +435,9 @@ class PackageScorer:
         Returns:
             Tuple of (score, details)
         """
-        direct_deps = data.get("direct_dep_count", 0)
-        vulnerable_deps = data.get("vulnerable_dep_count", 0)
-        deprecated_deps = data.get("deprecated_dep_count", 0)
+        direct_deps = data.get("direct_dep_count") or 0
+        vulnerable_deps = data.get("vulnerable_dep_count") or 0
+        deprecated_deps = data.get("deprecated_dep_count") or 0
 
         # Dependency count score (fewer is better)
         dep_count_score = 1.0 / (1.0 + math.log(1.0 + direct_deps))
@@ -436,6 +455,12 @@ class PackageScorer:
             "dep_count_score": dep_count_score,
             "dep_quality_score": dep_quality_score,
         }
+
+        # Blend Scorecard dep-health bucket if available (30% weight)
+        sc_dep = data.get("scorecard_dep_health_bucket")
+        if sc_dep is not None:
+            dependency_score = 0.7 * dependency_score + 0.3 * sc_dep
+            details["scorecard_dep_health_bucket"] = sc_dep
 
         return dependency_score, details
 
@@ -549,8 +574,8 @@ class PackageScorer:
         Returns:
             True if issues exceed thresholds, False otherwise
         """
-        vulnerable = data.get("vulnerable_dep_count", 0)
-        deprecated = data.get("deprecated_dep_count", 0)
+        vulnerable = data.get("vulnerable_dep_count") or 0
+        deprecated = data.get("deprecated_dep_count") or 0
         threshold = self.dependency_config["dep_health_deprecated_threshold"]
 
         return vulnerable > 0 or deprecated > threshold

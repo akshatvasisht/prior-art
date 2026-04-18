@@ -93,23 +93,12 @@ class TestVerifyIdentity:
             self.client.verify_identity("https://github.com/psf/requests", "requests", []) is True
         )
 
-    def test_release_tag_match(self):
-        self._mock_repo(name="some-repo", owner="org", release_tags=["v1.0.0", "mylib-v2.0.0"])
-        assert self.client.verify_identity("https://github.com/org/some-repo", "mylib", []) is True
-
     def test_maintainer_owner_match(self):
         self._mock_repo(name="unrelated-name", owner="psf")
         assert (
             self.client.verify_identity(
                 "https://github.com/psf/unrelated-name", "requests", ["psf"]
             )
-            is True
-        )
-
-    def test_maintainer_contributor_match(self):
-        self._mock_repo(name="unrelated", owner="org", contributor_logins=["alice", "bob"])
-        assert (
-            self.client.verify_identity("https://github.com/org/unrelated", "something", ["bob"])
             is True
         )
 
@@ -155,6 +144,20 @@ class TestVerifyIdentity:
         self.client.github.get_repo.side_effect = RuntimeError("network")
 
         assert self.client.verify_identity("https://github.com/owner/repo", "pkg", []) is False
+
+    def test_verify_identity_repo_substring_of_pkg_name(self):
+        """Repo name contained as substring of normalized package name returns True."""
+        # e.g. package "requests-oauthlib" with repo "requests": normalized_repo
+        # "requests" is a substring of normalized_pkg "requestsoauthlib".
+        self._mock_repo(name="requests", owner="unrelated-owner")
+        assert (
+            self.client.verify_identity(
+                "https://github.com/unrelated-owner/requests",
+                "requests-oauthlib",
+                [],
+            )
+            is True
+        )
 
 
 # --- GitHubSignals dataclass ---

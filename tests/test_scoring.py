@@ -373,3 +373,34 @@ def test_age_unparseable_string(sample_config, sample_package_data):
 
     scored = scorer.score_package(data)
     assert scored.age_years == 0.0
+
+
+def test_reliability_blends_scorecard_bucket(sample_config, sample_package_data):
+    """Scorecard reliability bucket blends at 30% weight into reliability score."""
+    scorer = PackageScorer(sample_config)
+
+    base_score, base_details = scorer._score_reliability(sample_package_data)
+
+    data = sample_package_data.copy()
+    data["scorecard_reliability_bucket"] = 1.0
+    blended_score, blended_details = scorer._score_reliability(data)
+
+    # Blend shifts score toward the bucket value (1.0 > base_score, so up)
+    assert blended_score != base_score
+    assert blended_score == pytest.approx(0.7 * base_score + 0.3 * 1.0)
+    assert blended_details["scorecard_reliability_bucket"] == 1.0
+
+
+def test_dep_health_blends_scorecard_bucket(sample_config, sample_package_data):
+    """Scorecard dep-health bucket blends at 30% weight into dep_health score."""
+    scorer = PackageScorer(sample_config)
+
+    base_score, _ = scorer._score_dependency(sample_package_data)
+
+    data = sample_package_data.copy()
+    data["scorecard_dep_health_bucket"] = 0.2
+    blended_score, blended_details = scorer._score_dependency(data)
+
+    assert blended_score != base_score
+    assert blended_score == pytest.approx(0.7 * base_score + 0.3 * 0.2)
+    assert blended_details["scorecard_dep_health_bucket"] == 0.2

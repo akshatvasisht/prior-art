@@ -83,3 +83,5 @@ dmypy.json
 
 # Agent Context
 agentcontext/
+.gitnexus
+.claude/

@@ -28,9 +28,9 @@ priorart --version
 
 ---
 
-## GitHub Token Setup
+## GitHub Token Setup (required)
 
-Create a GitHub Personal Access Token for API access:
+`priorart find` requires `GITHUB_TOKEN`. Without it, registry-only signals rarely clear the floor filter and most queries return no results.
 
 1. Go to https://github.com/settings/tokens
 2. Click "Generate new token (classic)"
@@ -44,7 +44,7 @@ export GITHUB_TOKEN="your_token_here"
 echo 'export GITHUB_TOKEN="your_token_here"' >> ~/.bashrc
 ```
 
-Without `GITHUB_TOKEN`, GitHub signals are skipped and packages score with registry/deps.dev data only.
+`priorart ingest` does not require a token (it only clones via git).
 
 ---
 
@@ -68,7 +68,7 @@ Add to your Claude Desktop config:
 }
 ```
 
-Restart Claude Desktop. Tools `find_alternatives` and `ingest_repo` should appear in the MCP servers list.
+Restart Claude Desktop. The `find_alternatives`, `evaluate_package`, and `ingest_repo` tools appear in the MCP servers list.
 
 ---
 

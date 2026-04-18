@@ -1,7 +1,7 @@
 """Tests for find_alternatives orchestration pipeline."""
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -48,13 +48,9 @@ def test_load_config_returns_dict():
 
 def test_load_config_rejects_bad_weights():
     """Config validation catches invalid weight sums."""
-    bad_yaml = "weights:\n  reliability: 0.99\n  adoption: 0.01\n  versioning: 0.0\n  activity_regularity: 0.0\n  dependency_health: 0.0\n"
+    bad_yaml = "weights:\n  reliability: 0.50\n  adoption: 0.50\n  versioning: 0.50\n  activity_regularity: 0.0\n  dependency_health: 0.0\n"
     with patch("priorart.core.utils.files") as mock_files:
         mock_files.return_value.joinpath.return_value.read_text.return_value = bad_yaml
-        # Sum is 1.0, so it should pass — test with truly bad weights
-    bad_yaml2 = "weights:\n  reliability: 0.50\n  adoption: 0.50\n  versioning: 0.50\n  activity_regularity: 0.0\n  dependency_health: 0.0\n"
-    with patch("priorart.core.utils.files") as mock_files:
-        mock_files.return_value.joinpath.return_value.read_text.return_value = bad_yaml2
         with pytest.raises(ValueError, match="must sum to 1.0"):
             load_config()
 
@@ -64,13 +60,11 @@ def test_load_config_rejects_bad_weights():
 
 @patch("priorart.core.find_alternatives.load_config")
 @patch("priorart.core.find_alternatives.SQLiteCache")
-@patch("priorart.core.find_alternatives.QueryMapper")
-@patch("priorart.core.find_alternatives.get_registry_client")
+@patch("priorart.core.find_alternatives.retrieve_candidates")
 @patch("priorart.core.find_alternatives._collect_package_signals")
 def test_find_alternatives_success(
     mock_collect,
-    mock_get_client,
-    mock_mapper_cls,
+    mock_retrieve,
     mock_cache_cls,
     mock_load_config,
     mock_config,
@@ -79,22 +73,7 @@ def test_find_alternatives_success(
     """Successful pipeline returns scored packages."""
     mock_load_config.return_value = mock_config
 
-    # QueryMapper returns a match
-    mapper_instance = MagicMock()
-    from priorart.core.query import QueryResult
-
-    mapper_instance.map_query.return_value = QueryResult(
-        matched=True,
-        search_query="python http client",
-        confidence=0.9,
-        service_note=None,
-    )
-    mock_mapper_cls.return_value = mapper_instance
-
-    # Registry returns candidates
-    client_ctx = MagicMock()
-    client_instance = MagicMock()
-    client_instance.search.return_value = [
+    mock_retrieve.return_value = [
         PackageCandidate(
             name="requests",
             registry="pypi",
@@ -104,11 +83,6 @@ def test_find_alternatives_success(
             weekly_downloads=45_000_000,
         ),
     ]
-    client_ctx.__enter__ = MagicMock(return_value=client_instance)
-    client_ctx.__exit__ = MagicMock(return_value=False)
-    mock_get_client.return_value = client_ctx
-
-    # Signal collection returns package data
     mock_collect.return_value = sample_package_data
 
     result = find_alternatives("python", "http client")
@@ -123,52 +97,11 @@ def test_find_alternatives_success(
 
 @patch("priorart.core.find_alternatives.load_config")
 @patch("priorart.core.find_alternatives.SQLiteCache")
-@patch("priorart.core.find_alternatives.QueryMapper")
-def test_find_alternatives_no_taxonomy_match(
-    mock_mapper_cls, mock_cache_cls, mock_load_config, mock_config
-):
-    """Returns no_match when taxonomy doesn't match the task."""
+@patch("priorart.core.find_alternatives.retrieve_candidates")
+def test_find_alternatives_no_results(mock_retrieve, mock_cache_cls, mock_load_config, mock_config):
+    """Returns no_results when retrieval finds nothing."""
     mock_load_config.return_value = mock_config
-
-    mapper_instance = MagicMock()
-    from priorart.core.query import QueryResult
-
-    mapper_instance.map_query.return_value = QueryResult(matched=False)
-    mapper_instance.get_no_match_response.return_value = {
-        "status": "no_match",
-        "message": "Could not map task to a known category",
-    }
-    mock_mapper_cls.return_value = mapper_instance
-
-    result = find_alternatives("python", "quantum flux capacitor")
-
-    assert result["status"] == "no_match"
-
-
-@patch("priorart.core.find_alternatives.load_config")
-@patch("priorart.core.find_alternatives.SQLiteCache")
-@patch("priorart.core.find_alternatives.QueryMapper")
-@patch("priorart.core.find_alternatives.get_registry_client")
-def test_find_alternatives_no_registry_results(
-    mock_get_client, mock_mapper_cls, mock_cache_cls, mock_load_config, mock_config
-):
-    """Returns no_results when registry search finds nothing."""
-    mock_load_config.return_value = mock_config
-
-    mapper_instance = MagicMock()
-    from priorart.core.query import QueryResult
-
-    mapper_instance.map_query.return_value = QueryResult(
-        matched=True, search_query="obscure query", confidence=0.8
-    )
-    mock_mapper_cls.return_value = mapper_instance
-
-    client_ctx = MagicMock()
-    client_instance = MagicMock()
-    client_instance.search.return_value = []
-    client_ctx.__enter__ = MagicMock(return_value=client_instance)
-    client_ctx.__exit__ = MagicMock(return_value=False)
-    mock_get_client.return_value = client_ctx
+    mock_retrieve.return_value = []
 
     result = find_alternatives("python", "obscure thing")
 
@@ -177,26 +110,15 @@ def test_find_alternatives_no_registry_results(
 
 @patch("priorart.core.find_alternatives.load_config")
 @patch("priorart.core.find_alternatives.SQLiteCache")
-@patch("priorart.core.find_alternatives.QueryMapper")
-@patch("priorart.core.find_alternatives.get_registry_client")
+@patch("priorart.core.find_alternatives.retrieve_candidates")
 @patch("priorart.core.find_alternatives._collect_package_signals")
 def test_find_alternatives_below_threshold(
-    mock_collect, mock_get_client, mock_mapper_cls, mock_cache_cls, mock_load_config, mock_config
+    mock_collect, mock_retrieve, mock_cache_cls, mock_load_config, mock_config
 ):
     """Returns below_threshold when all candidates fail floor filter."""
     mock_load_config.return_value = mock_config
 
-    mapper_instance = MagicMock()
-    from priorart.core.query import QueryResult
-
-    mapper_instance.map_query.return_value = QueryResult(
-        matched=True, search_query="test", confidence=0.8
-    )
-    mock_mapper_cls.return_value = mapper_instance
-
-    client_ctx = MagicMock()
-    client_instance = MagicMock()
-    client_instance.search.return_value = [
+    mock_retrieve.return_value = [
         PackageCandidate(
             name="tiny-pkg",
             registry="pypi",
@@ -205,11 +127,7 @@ def test_find_alternatives_below_threshold(
             weekly_downloads=10,
         ),
     ]
-    client_ctx.__enter__ = MagicMock(return_value=client_instance)
-    client_ctx.__exit__ = MagicMock(return_value=False)
-    mock_get_client.return_value = client_ctx
 
-    # Return data with very low downloads and stars
     mock_collect.return_value = {
         "name": "tiny-pkg",
         "package_name": "tiny-pkg",
@@ -323,13 +241,11 @@ def test_save_to_cache(mock_candidate):
 
 @patch("priorart.core.find_alternatives.load_config")
 @patch("priorart.core.find_alternatives.SQLiteCache")
-@patch("priorart.core.find_alternatives.QueryMapper")
-@patch("priorart.core.find_alternatives.get_registry_client")
+@patch("priorart.core.find_alternatives.retrieve_candidates")
 @patch("priorart.core.find_alternatives._collect_package_signals")
 def test_find_alternatives_explain_mode(
     mock_collect,
-    mock_get_client,
-    mock_mapper_cls,
+    mock_retrieve,
     mock_cache_cls,
     mock_load_config,
     mock_config,
@@ -338,17 +254,7 @@ def test_find_alternatives_explain_mode(
     """Explain mode includes score_breakdown in output."""
     mock_load_config.return_value = mock_config
 
-    mapper_instance = MagicMock()
-    from priorart.core.query import QueryResult
-
-    mapper_instance.map_query.return_value = QueryResult(
-        matched=True, search_query="python http client", confidence=0.9
-    )
-    mock_mapper_cls.return_value = mapper_instance
-
-    client_ctx = MagicMock()
-    client_instance = MagicMock()
-    client_instance.search.return_value = [
+    mock_retrieve.return_value = [
         PackageCandidate(
             name="requests",
             registry="pypi",
@@ -358,10 +264,6 @@ def test_find_alternatives_explain_mode(
             weekly_downloads=45_000_000,
         ),
     ]
-    client_ctx.__enter__ = MagicMock(return_value=client_instance)
-    client_ctx.__exit__ = MagicMock(return_value=False)
-    mock_get_client.return_value = client_ctx
-
     mock_collect.return_value = sample_package_data
 
     result = find_alternatives("python", "http client", explain=True)
@@ -489,6 +391,65 @@ def test_fetch_fresh_signals_no_github_token(mock_candidate, mock_config):
     assert "mttr_state" not in signals
 
 
+def test_fetch_fresh_signals_populates_days_since_compatible_release(mock_candidate, mock_config):
+    """Publish date of the latest version flows into days_since_compatible_release."""
+    from priorart.core.deps_dev import DepsDevData, VersionInfo
+
+    published = datetime.now(timezone.utc) - timedelta(days=42)
+    deps_data = DepsDevData(
+        package_name="requests",
+        ecosystem="pypi",
+        versions=[
+            VersionInfo(version="0.9.0", published_at=published - timedelta(days=400)),
+            VersionInfo(version="1.0.0", published_at=published),
+        ],
+        latest_version="1.0.0",
+        first_release_date=published - timedelta(days=400),
+    )
+
+    with patch.dict(os.environ, {}, clear=True):
+        with patch("priorart.core.find_alternatives.DepsDevClient") as mock_deps_cls:
+            deps_instance = MagicMock()
+            deps_instance.get_package_data.return_value = deps_data
+            ctx = MagicMock()
+            ctx.__enter__ = MagicMock(return_value=deps_instance)
+            ctx.__exit__ = MagicMock(return_value=False)
+            mock_deps_cls.return_value = ctx
+
+            signals = _fetch_fresh_signals(
+                mock_candidate, "https://github.com/psf/requests", mock_config
+            )
+
+    assert signals["days_since_compatible_release"] == 42
+
+
+def test_fetch_fresh_signals_omits_days_when_publish_date_missing(mock_candidate, mock_config):
+    """If the latest version has no publish date, the signal stays unset."""
+    from priorart.core.deps_dev import DepsDevData, VersionInfo
+
+    deps_data = DepsDevData(
+        package_name="requests",
+        ecosystem="pypi",
+        versions=[VersionInfo(version="1.0.0", published_at=None)],
+        latest_version="1.0.0",
+    )
+
+    with patch.dict(os.environ, {}, clear=True):
+        with patch("priorart.core.find_alternatives.DepsDevClient") as mock_deps_cls:
+            deps_instance = MagicMock()
+            deps_instance.get_package_data.return_value = deps_data
+            ctx = MagicMock()
+            ctx.__enter__ = MagicMock(return_value=deps_instance)
+            ctx.__exit__ = MagicMock(return_value=False)
+            mock_deps_cls.return_value = ctx
+
+            signals = _fetch_fresh_signals(
+                mock_candidate, "https://github.com/psf/requests", mock_config
+            )
+
+    assert "days_since_compatible_release" not in signals
+
+
 # --- Edge cases in _collect_package_signals ---
 
 
@@ -574,26 +535,15 @@ def test_collect_signals_cache_save_exception(mock_fetch, mock_candidate, mock_c
 
 @patch("priorart.core.find_alternatives.load_config")
 @patch("priorart.core.find_alternatives.SQLiteCache")
-@patch("priorart.core.find_alternatives.QueryMapper")
-@patch("priorart.core.find_alternatives.get_registry_client")
+@patch("priorart.core.find_alternatives.retrieve_candidates")
 @patch("priorart.core.find_alternatives._collect_package_signals")
 def test_find_alternatives_collect_signals_exception(
-    mock_collect, mock_get_client, mock_mapper_cls, mock_cache_cls, mock_load_config, mock_config
+    mock_collect, mock_retrieve, mock_cache_cls, mock_load_config, mock_config
 ):
     """Exception during signal collection is caught and skipped."""
     mock_load_config.return_value = mock_config
 
-    mapper_instance = MagicMock()
-    from priorart.core.query import QueryResult
-
-    mapper_instance.map_query.return_value = QueryResult(
-        matched=True, search_query="test", confidence=0.8
-    )
-    mock_mapper_cls.return_value = mapper_instance
-
-    client_ctx = MagicMock()
-    client_instance = MagicMock()
-    client_instance.search.return_value = [
+    mock_retrieve.return_value = [
         PackageCandidate(
             name="pkg",
             registry="pypi",
@@ -602,28 +552,20 @@ def test_find_alternatives_collect_signals_exception(
             weekly_downloads=1000,
         ),
     ]
-    client_ctx.__enter__ = MagicMock(return_value=client_instance)
-    client_ctx.__exit__ = MagicMock(return_value=False)
-    mock_get_client.return_value = client_ctx
-
-    # Signal collection raises
     mock_collect.side_effect = RuntimeError("API error")
 
     result = find_alternatives("python", "test")
 
-    # All candidates failed → no_results
     assert result["status"] == "no_results"
 
 
 @patch("priorart.core.find_alternatives.load_config")
 @patch("priorart.core.find_alternatives.SQLiteCache")
-@patch("priorart.core.find_alternatives.QueryMapper")
-@patch("priorart.core.find_alternatives.get_registry_client")
+@patch("priorart.core.find_alternatives.retrieve_candidates")
 @patch("priorart.core.find_alternatives._collect_package_signals")
 def test_find_alternatives_score_exception(
     mock_collect,
-    mock_get_client,
-    mock_mapper_cls,
+    mock_retrieve,
     mock_cache_cls,
     mock_load_config,
     mock_config,
@@ -632,17 +574,7 @@ def test_find_alternatives_score_exception(
     """Exception during scoring is caught and skipped."""
     mock_load_config.return_value = mock_config
 
-    mapper_instance = MagicMock()
-    from priorart.core.query import QueryResult
-
-    mapper_instance.map_query.return_value = QueryResult(
-        matched=True, search_query="test", confidence=0.8
-    )
-    mock_mapper_cls.return_value = mapper_instance
-
-    client_ctx = MagicMock()
-    client_instance = MagicMock()
-    client_instance.search.return_value = [
+    mock_retrieve.return_value = [
         PackageCandidate(
             name="requests",
             registry="pypi",
@@ -651,10 +583,6 @@ def test_find_alternatives_score_exception(
             weekly_downloads=45_000_000,
         ),
     ]
-    client_ctx.__enter__ = MagicMock(return_value=client_instance)
-    client_ctx.__exit__ = MagicMock(return_value=False)
-    mock_get_client.return_value = client_ctx
-
     mock_collect.return_value = sample_package_data
 
     # Make scorer.score_package raise
@@ -734,3 +662,140 @@ def test_collect_signals_deps_dev_fallback_exception(mock_config):
         result = _collect_package_signals(candidate, "python", cache, mock_config, None)
 
     assert result is None
+
+
+# --- _latest_stable_published_at coverage ---
+
+
+def test_latest_stable_published_at_no_latest_version():
+    """Returns None when latest_version is unset."""
+    from priorart.core.deps_dev import DepsDevData
+    from priorart.core.find_alternatives import _latest_stable_published_at
+
+    data = DepsDevData(package_name="p", ecosystem="pypi", latest_version=None)
+    assert _latest_stable_published_at(data) is None
+
+
+def test_latest_stable_published_at_versions_not_list():
+    """Returns None when versions is not a list (defensive)."""
+    from priorart.core.deps_dev import DepsDevData
+    from priorart.core.find_alternatives import _latest_stable_published_at
+
+    data = DepsDevData(package_name="p", ecosystem="pypi", latest_version="1.0.0")
+    data.versions = "not-a-list"  # type: ignore[assignment]
+    assert _latest_stable_published_at(data) is None
+
+
+def test_latest_stable_published_at_no_matching_version():
+    """Returns None when latest_version doesn't match any VersionInfo."""
+    from priorart.core.deps_dev import DepsDevData, VersionInfo
+    from priorart.core.find_alternatives import _latest_stable_published_at
+
+    data = DepsDevData(
+        package_name="p",
+        ecosystem="pypi",
+        latest_version="9.9.9",
+        versions=[VersionInfo(version="1.0.0", published_at=datetime.now(timezone.utc))],
+    )
+    assert _latest_stable_published_at(data) is None
+
+
+def test_latest_stable_published_at_no_publish_date():
+    """Returns None when the matching version has no published_at."""
+    from priorart.core.deps_dev import DepsDevData, VersionInfo
+    from priorart.core.find_alternatives import _latest_stable_published_at
+
+    data = DepsDevData(
+        package_name="p",
+        ecosystem="pypi",
+        latest_version="1.0.0",
+        versions=[VersionInfo(version="1.0.0", published_at=None)],
+    )
+    assert _latest_stable_published_at(data) is None
+
+
+# --- Scorecard exception swallowed in _fetch_fresh_signals ---
+
+
+def test_fetch_fresh_signals_scorecard_exception_swallowed(mock_candidate, mock_config):
+    """ScorecardClient errors are caught; signals dict still returned sans scorecard_*."""
+    with patch.dict(os.environ, {}, clear=True):
+        os.environ.pop("GITHUB_TOKEN", None)
+
+        with patch("priorart.core.find_alternatives.DepsDevClient") as mock_deps_cls:
+            deps_instance = MagicMock()
+            deps_instance.get_package_data.return_value = None
+            ctx = MagicMock()
+            ctx.__enter__ = MagicMock(return_value=deps_instance)
+            ctx.__exit__ = MagicMock(return_value=False)
+            mock_deps_cls.return_value = ctx
+
+            with patch("priorart.core.find_alternatives.ScorecardClient") as mock_sc_cls:
+                sc_instance = MagicMock()
+                sc_instance.fetch.side_effect = RuntimeError("scorecard down")
+                sc_ctx = MagicMock()
+                sc_ctx.__enter__ = MagicMock(return_value=sc_instance)
+                sc_ctx.__exit__ = MagicMock(return_value=False)
+                mock_sc_cls.return_value = sc_ctx
+
+                signals = _fetch_fresh_signals(
+                    mock_candidate, "https://github.com/psf/requests", mock_config
+                )
+
+    assert isinstance(signals, dict)
+    assert "scorecard_overall" not in signals
+    assert "scorecard_reliability_bucket" not in signals
+
+
+# --- evaluate_candidate coverage ---
+
+
+def test_evaluate_candidate_no_signals_returns_none(mock_candidate, mock_config):
+    """evaluate_candidate returns None when _collect_package_signals returns None."""
+    from priorart.core.find_alternatives import evaluate_candidate
+    from priorart.core.scoring import PackageScorer
+
+    cache = MagicMock()
+    scorer = PackageScorer(mock_config)
+
+    with patch("priorart.core.find_alternatives._collect_package_signals", return_value=None):
+        result = evaluate_candidate(mock_candidate, "python", cache, mock_config, scorer)
+
+    assert result is None
+
+
+def test_evaluate_candidate_scorer_raises_returns_none(
+    mock_candidate, mock_config, sample_package_data
+):
+    """evaluate_candidate catches scoring exceptions and returns None."""
+    from priorart.core.find_alternatives import evaluate_candidate
+
+    cache = MagicMock()
+    scorer = MagicMock()
+    scorer.score_package.side_effect = RuntimeError("scoring blew up")
+
+    with patch(
+        "priorart.core.find_alternatives._collect_package_signals",
+        return_value=sample_package_data,
+    ):
+        result = evaluate_candidate(mock_candidate, "python", cache, mock_config, scorer)
+
+    assert result is None
+
+
+def test_evaluate_candidate_success_path(mock_candidate, mock_config, sample_package_data):
+    """evaluate_candidate returns scored package on the happy path."""
+    from priorart.core.find_alternatives import evaluate_candidate
+    from priorart.core.scoring import PackageScorer
+
+    cache = MagicMock()
+    scorer = PackageScorer(mock_config)
+
+    with patch(
+        "priorart.core.find_alternatives._collect_package_signals",
+        return_value=sample_package_data,
+    ):
+        result = evaluate_candidate(mock_candidate, "python", cache, mock_config, scorer)
+
+    assert result is not None
+    assert result.name == "requests"

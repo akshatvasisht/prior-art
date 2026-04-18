@@ -1,0 +1,8 @@
+{"query": "http client", "language": "python", "relevant": ["requests", "httpx", "urllib3", "aiohttp"]}
+{"query": "json parser", "language": "python", "relevant": ["orjson", "ujson", "simplejson", "rapidjson"]}
+{"query": "jwt parser", "language": "python", "relevant": ["pyjwt", "python-jose", "authlib"]}
+{"query": "http client", "language": "javascript", "relevant": ["axios", "node-fetch", "got", "ky"]}
+{"query": "date manipulation", "language": "javascript", "relevant": ["date-fns", "dayjs", "luxon", "moment"]}
+{"query": "http client", "language": "rust", "relevant": ["reqwest", "hyper", "ureq", "surf"]}
+{"query": "cli parser", "language": "rust", "relevant": ["clap", "structopt", "argh"]}
+{"query": "http router", "language": "go", "relevant": ["gin", "chi", "gorilla/mux", "echo"]}
