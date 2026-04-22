@@ -79,13 +79,20 @@ class DepsDevClient:
 
         Args:
             package_name: Package name
-            ecosystem: Ecosystem (pypi, npm, cargo, go)
+            ecosystem: Ecosystem (pypi, npm, cargo, go, maven, nuget)
 
         Returns:
             DepsDevData with all available information
         """
         # Map our ecosystem names to deps.dev format
-        ecosystem_map = {"pypi": "pypi", "npm": "npm", "cargo": "cargo", "go": "go"}
+        ecosystem_map = {
+            "pypi": "pypi",
+            "npm": "npm",
+            "cargo": "cargo",
+            "go": "go",
+            "maven": "maven",
+            "nuget": "nuget",
+        }
 
         deps_ecosystem = ecosystem_map.get(ecosystem.lower())
         if not deps_ecosystem:
@@ -305,7 +312,7 @@ class DepsDevClient:
 
         Args:
             package_name: Package name
-            ecosystem: Ecosystem (pypi, npm, cargo, go)
+            ecosystem: Ecosystem (pypi, npm, cargo, go, maven, nuget)
 
         Returns:
             GitHub URL if found, None otherwise

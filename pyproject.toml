@@ -49,9 +49,7 @@ dev = [
     "mypy>=1.0",
     "pytest-cov>=4.0",
 ]
-index-build = [
-    "google-cloud-bigquery>=3.0",
-]
+index-build = []
 
 [project.scripts]
 priorart = "priorart.cli:main"

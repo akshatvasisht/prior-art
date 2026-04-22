@@ -423,6 +423,127 @@ class PkgGoDevClient(RegistryClient):
         return PackageCandidate(name=import_path, registry="go", github_url=github_url)
 
 
+class MavenCentralClient(RegistryClient):
+    """Maven Central Solr search + ecosyste.ms for description enrichment."""
+
+    SOLR_URL = "https://search.maven.org/solrsearch/select"
+    ECOS_URL = "https://packages.ecosyste.ms/api/v1/registries/repo1.maven.org/packages"
+
+    def __init__(self, timeout: int = 60):
+        # Maven Central Solr can be slow under cold-cache conditions; give it headroom.
+        super().__init__(timeout=timeout)
+
+    def search(self, query: str, max_results: int = 20) -> list[PackageCandidate]:
+        try:
+            resp = self.client.get(
+                self.SOLR_URL, params={"q": query, "rows": max_results, "wt": "json"}
+            )
+            if resp.status_code != 200:
+                return []
+            docs = resp.json().get("response", {}).get("docs", [])
+        except (httpx.RequestError, ValueError) as e:
+            logger.warning(f"Maven Central search failed: {e}")
+            return []
+
+        candidates: list[PackageCandidate] = []
+        for d in docs:
+            group = d.get("g")
+            artifact = d.get("a")
+            if not group or not artifact:
+                continue
+            candidates.append(
+                PackageCandidate(
+                    name=f"{group}:{artifact}",
+                    registry="maven",
+                    version=d.get("latestVersion"),
+                )
+            )
+        return candidates
+
+    def get_package_info(self, package_name: str) -> PackageCandidate | None:
+        """Fetch via ecosyste.ms for descriptions/licenses/repo URL not in Solr."""
+        try:
+            resp = self.client.get(f"{self.ECOS_URL}/{package_name}")
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+        except (httpx.RequestError, ValueError) as e:
+            logger.warning(f"Maven Central lookup failed for {package_name}: {e}")
+            return None
+
+        repo = data.get("repository_url")
+        github_url = validate_github_url(repo) if repo else None
+        return PackageCandidate(
+            name=data.get("name") or package_name,
+            registry="maven",
+            description=data.get("description"),
+            version=data.get("latest_release_number"),
+            github_url=github_url,
+            homepage=data.get("homepage"),
+            license=data.get("licenses"),
+        )
+
+
+class NuGetClient(RegistryClient):
+    """NuGet Azure Search + ecosyste.ms fallback."""
+
+    SEARCH_URL = "https://azuresearch-usnc.nuget.org/query"
+    ECOS_URL = "https://packages.ecosyste.ms/api/v1/registries/nuget.org/packages"
+
+    def search(self, query: str, max_results: int = 20) -> list[PackageCandidate]:
+        try:
+            resp = self.client.get(
+                self.SEARCH_URL,
+                params={"q": query, "take": max_results, "prerelease": "false"},
+            )
+            if resp.status_code != 200:
+                return []
+            results = resp.json().get("data", [])
+        except (httpx.RequestError, ValueError) as e:
+            logger.warning(f"NuGet search failed: {e}")
+            return []
+
+        candidates: list[PackageCandidate] = []
+        for d in results:
+            pkg_id = d.get("id")
+            if not pkg_id:
+                continue
+            repo = d.get("projectUrl") or ""
+            github_url = validate_github_url(repo) if repo else None
+            candidates.append(
+                PackageCandidate(
+                    name=pkg_id,
+                    registry="nuget",
+                    description=d.get("description"),
+                    version=d.get("version"),
+                    github_url=github_url,
+                )
+            )
+        return candidates
+
+    def get_package_info(self, package_name: str) -> PackageCandidate | None:
+        try:
+            resp = self.client.get(f"{self.ECOS_URL}/{package_name.lower()}")
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+        except (httpx.RequestError, ValueError) as e:
+            logger.warning(f"NuGet lookup failed for {package_name}: {e}")
+            return None
+
+        repo = data.get("repository_url")
+        github_url = validate_github_url(repo) if repo else None
+        return PackageCandidate(
+            name=data.get("name") or package_name,
+            registry="nuget",
+            description=data.get("description"),
+            version=data.get("latest_release_number"),
+            github_url=github_url,
+            homepage=data.get("homepage"),
+            license=data.get("licenses"),
+        )
+
+
 def get_registry_client(language: str) -> RegistryClient:
     """Get the appropriate registry client for a language.
 
@@ -443,6 +564,15 @@ def get_registry_client(language: str) -> RegistryClient:
         "cargo": CratesIOClient,
         "go": PkgGoDevClient,
         "golang": PkgGoDevClient,
+        "java": MavenCentralClient,
+        "maven": MavenCentralClient,
+        "kotlin": MavenCentralClient,
+        "scala": MavenCentralClient,
+        "csharp": NuGetClient,
+        "c#": NuGetClient,
+        "dotnet": NuGetClient,
+        "nuget": NuGetClient,
+        "fsharp": NuGetClient,
     }
 
     client_class = registry_map.get(language)

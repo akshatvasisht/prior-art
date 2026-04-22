@@ -66,14 +66,14 @@ def test_fetch_ecosystem_recency_disabled_when_zero():
     mock_recency.assert_not_called()
 
 
-def test_iter_deps_dev_by_recency_handles_missing_bigquery_lib(monkeypatch):
-    """Missing google-cloud-bigquery should yield no records, not crash."""
-    import sys
-
+def test_iter_deps_dev_by_recency_handles_api_failure(monkeypatch):
+    """A failed ecosyste.ms response should yield no records, not crash."""
     import scripts.index_build.fetch as fetch_mod
 
-    # Force the deferred import to fail.
-    monkeypatch.setitem(sys.modules, "google.cloud", None)
+    def _fail(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(fetch_mod, "_get_with_retry", _fail)
 
     records = list(fetch_mod._iter_deps_dev_by_recency("python", top_n=10))
     assert records == []

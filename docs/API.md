@@ -20,7 +20,7 @@ result = find_alternatives(
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `language` | `str` | Yes | `"python"`, `"javascript"`, `"typescript"`, `"rust"`, `"go"` |
+| `language` | `str` | Yes | `"python"`, `"javascript"`, `"typescript"`, `"rust"`, `"go"`, `"java"`, `"kotlin"`, `"scala"`, `"csharp"`, `"dotnet"`, `"fsharp"` |
 | `task_description` | `str` | Yes | Natural language task description (e.g., "http client", "rate limiter") |
 | `explain` | `bool` | No | Include per-dimension score breakdowns (default: `False`) |
 | `lite` | `bool` | No | Skip the semantic index download; use live registry search instead (default: `False`) |
@@ -218,4 +218,5 @@ Without `GITHUB_TOKEN`, GitHub signals are skipped and packages score with regis
 ## Rate Limits
 
 - **GitHub API:** 5,000 requests/hour with authentication. Registry-first architecture minimizes usage.
-- **Registry APIs (PyPI, npm, crates.io):** No authentication required, no rate limits.
+- **Registry APIs (PyPI, npm, crates.io, pkg.go.dev, Maven Central, NuGet):** No authentication required; generous public quotas.
+- **ecosyste.ms API** (used for Maven/NuGet `get_package_info` enrichment): 5,000 requests/hour anonymous, more than enough for interactive use.

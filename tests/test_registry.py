@@ -9,7 +9,9 @@ import pytest
 
 from priorart.core.registry import (
     CratesIOClient,
+    MavenCentralClient,
     NPMClient,
+    NuGetClient,
     PackageCandidate,
     PkgGoDevClient,
     PyPIClient,
@@ -120,6 +122,12 @@ def test_get_registry_client():
     assert isinstance(get_registry_client("typescript"), NPMClient)
     assert isinstance(get_registry_client("rust"), CratesIOClient)
     assert isinstance(get_registry_client("cargo"), CratesIOClient)
+    assert isinstance(get_registry_client("java"), MavenCentralClient)
+    assert isinstance(get_registry_client("kotlin"), MavenCentralClient)
+    assert isinstance(get_registry_client("scala"), MavenCentralClient)
+    assert isinstance(get_registry_client("csharp"), NuGetClient)
+    assert isinstance(get_registry_client("dotnet"), NuGetClient)
+    assert isinstance(get_registry_client("fsharp"), NuGetClient)
 
 
 def test_get_registry_client_unknown_language():
@@ -628,3 +636,231 @@ def test_crates_get_info_exception():
 
     result = client.get_package_info("pkg")
     assert result is None
+
+
+@pytest.mark.integration
+def test_maven_central_search():
+    """Maven Central search returns groupId:artifactId candidates."""
+    client = MavenCentralClient()
+    results = client.search("junit", max_results=5)
+    assert len(results) > 0
+    assert all(r.registry == "maven" for r in results)
+    assert all(":" in r.name for r in results)
+
+
+@pytest.mark.integration
+def test_maven_central_get_package_info():
+    """Maven Central get_package_info via ecosyste.ms returns full fields."""
+    client = MavenCentralClient()
+    result = client.get_package_info("junit:junit")
+    assert result is not None
+    assert result.name == "junit:junit"
+    assert result.registry == "maven"
+    assert result.description is not None
+    assert "unit testing" in result.description.lower()
+
+
+def test_maven_search_handles_failure():
+    """Maven Central search returns empty list on HTTP error."""
+    client = MavenCentralClient()
+    client.client = MagicMock()
+    resp = MagicMock()
+    resp.status_code = 500
+    client.client.get.return_value = resp
+    assert client.search("anything") == []
+
+
+def test_maven_get_info_not_found():
+    """Maven Central get_package_info returns None on 404."""
+    client = MavenCentralClient()
+    client.client = MagicMock()
+    resp = MagicMock()
+    resp.status_code = 404
+    client.client.get.return_value = resp
+    assert client.get_package_info("nope:nope") is None
+
+
+@pytest.mark.integration
+def test_nuget_search():
+    """NuGet Azure search returns packages with descriptions."""
+    client = NuGetClient()
+    results = client.search("json", max_results=5)
+    assert len(results) > 0
+    assert all(r.registry == "nuget" for r in results)
+    assert any(r.description for r in results)
+
+
+@pytest.mark.integration
+def test_nuget_get_package_info():
+    """NuGet get_package_info via ecosyste.ms returns full fields."""
+    client = NuGetClient()
+    result = client.get_package_info("newtonsoft.json")
+    assert result is not None
+    assert result.name.lower() == "newtonsoft.json"
+    assert result.registry == "nuget"
+    assert result.description is not None
+
+
+def test_nuget_search_handles_failure():
+    """NuGet search returns empty list on HTTP error."""
+    client = NuGetClient()
+    client.client = MagicMock()
+    resp = MagicMock()
+    resp.status_code = 500
+    client.client.get.return_value = resp
+    assert client.search("anything") == []
+
+
+def test_nuget_get_info_not_found():
+    """NuGet get_package_info returns None on 404."""
+    client = NuGetClient()
+    client.client = MagicMock()
+    resp = MagicMock()
+    resp.status_code = 404
+    client.client.get.return_value = resp
+    assert client.get_package_info("nonexistent") is None
+
+
+def test_maven_search_parses_solr_response():
+    """Maven Central search extracts groupId:artifactId from Solr docs."""
+    client = MavenCentralClient()
+    client.client = MagicMock()
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {
+        "response": {
+            "docs": [
+                {"g": "junit", "a": "junit", "latestVersion": "4.13.2"},
+                {"g": "org.slf4j", "a": "slf4j-api", "latestVersion": "2.0.9"},
+                # Missing group — should be skipped.
+                {"a": "orphan", "latestVersion": "1.0.0"},
+            ]
+        }
+    }
+    client.client.get.return_value = resp
+
+    results = client.search("junit", max_results=5)
+    assert len(results) == 2
+    assert results[0].name == "junit:junit"
+    assert results[0].version == "4.13.2"
+    assert results[0].registry == "maven"
+    assert results[1].name == "org.slf4j:slf4j-api"
+
+
+def test_maven_search_network_error_returns_empty():
+    """Maven Central search returns empty list on RequestError."""
+    import httpx
+
+    client = MavenCentralClient()
+    client.client = MagicMock()
+    client.client.get.side_effect = httpx.RequestError("boom")
+    assert client.search("x") == []
+
+
+def test_maven_get_info_parses_ecosystems_response():
+    """Maven Central get_package_info maps ecosyste.ms fields onto PackageCandidate."""
+    client = MavenCentralClient()
+    client.client = MagicMock()
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {
+        "name": "junit:junit",
+        "description": "JUnit is a unit testing framework.",
+        "latest_release_number": "4.13.2",
+        "repository_url": "https://github.com/junit-team/junit4",
+        "homepage": "http://junit.org",
+        "licenses": "Eclipse Public License 1.0",
+    }
+    client.client.get.return_value = resp
+
+    result = client.get_package_info("junit:junit")
+    assert result is not None
+    assert result.name == "junit:junit"
+    assert result.registry == "maven"
+    assert result.description == "JUnit is a unit testing framework."
+    assert result.version == "4.13.2"
+    assert result.github_url == "https://github.com/junit-team/junit4"
+    assert result.homepage == "http://junit.org"
+
+
+def test_maven_get_info_network_error_returns_none():
+    """Maven Central get_package_info returns None on RequestError."""
+    import httpx
+
+    client = MavenCentralClient()
+    client.client = MagicMock()
+    client.client.get.side_effect = httpx.RequestError("boom")
+    assert client.get_package_info("anything:anything") is None
+
+
+def test_nuget_search_parses_azure_response():
+    """NuGet search extracts id/version/description from Azure Search results."""
+    client = NuGetClient()
+    client.client = MagicMock()
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {
+        "data": [
+            {
+                "id": "Newtonsoft.Json",
+                "version": "13.0.4",
+                "description": "Json.NET is a popular high-performance JSON framework",
+                "projectUrl": "https://github.com/JamesNK/Newtonsoft.Json",
+            },
+            # Missing id — should be skipped.
+            {"version": "1.0.0", "description": "no id"},
+        ]
+    }
+    client.client.get.return_value = resp
+
+    results = client.search("json", max_results=5)
+    assert len(results) == 1
+    assert results[0].name == "Newtonsoft.Json"
+    assert results[0].version == "13.0.4"
+    assert results[0].registry == "nuget"
+    assert results[0].github_url == "https://github.com/JamesNK/Newtonsoft.Json"
+
+
+def test_nuget_search_network_error_returns_empty():
+    """NuGet search returns empty list on RequestError."""
+    import httpx
+
+    client = NuGetClient()
+    client.client = MagicMock()
+    client.client.get.side_effect = httpx.RequestError("boom")
+    assert client.search("x") == []
+
+
+def test_nuget_get_info_parses_ecosystems_response():
+    """NuGet get_package_info maps ecosyste.ms fields onto PackageCandidate."""
+    client = NuGetClient()
+    client.client = MagicMock()
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {
+        "name": "Newtonsoft.Json",
+        "description": "Json.NET is a popular high-performance JSON framework for .NET",
+        "latest_release_number": "13.0.4",
+        "repository_url": "https://github.com/JamesNK/Newtonsoft.Json",
+        "homepage": "https://www.newtonsoft.com/json",
+        "licenses": "MIT",
+    }
+    client.client.get.return_value = resp
+
+    result = client.get_package_info("Newtonsoft.Json")
+    assert result is not None
+    assert result.name == "Newtonsoft.Json"
+    assert result.registry == "nuget"
+    assert result.description.startswith("Json.NET")
+    assert result.version == "13.0.4"
+    assert result.github_url == "https://github.com/JamesNK/Newtonsoft.Json"
+
+
+def test_nuget_get_info_network_error_returns_none():
+    """NuGet get_package_info returns None on RequestError."""
+    import httpx
+
+    client = NuGetClient()
+    client.client = MagicMock()
+    client.client.get.side_effect = httpx.RequestError("boom")
+    assert client.get_package_info("anything") is None

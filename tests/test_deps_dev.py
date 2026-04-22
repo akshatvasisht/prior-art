@@ -367,7 +367,7 @@ class TestGetPackageData:
 
     def test_unsupported_ecosystem(self):
         """Unsupported ecosystem returns None."""
-        result = self.client.get_package_data("pkg", "maven")
+        result = self.client.get_package_data("pkg", "cobol")
         assert result is None
 
 

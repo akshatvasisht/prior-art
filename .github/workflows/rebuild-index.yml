@@ -12,16 +12,17 @@ on:
         default: "20000"
 
 permissions:
-  id-token: write  # required for sigstore keyless signing
+  id-token: write  # required for sigstore keyless signing (assemble job)
   contents: read
 
 jobs:
-  build:
+  build-shard:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      TOP_N: ${{ github.event.inputs.top_n || '20000' }}
-      HF_REPO_ID: priorart/package-index
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        ecosystem: [python, npm, crates, go, maven, nuget]
     steps:
       - uses: actions/checkout@v4
 
@@ -32,20 +33,55 @@ jobs:
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install fastembed usearch numpy huggingface_hub sigstore google-cloud-bigquery
+          pip install fastembed usearch numpy httpx
 
-      - name: Authenticate to Google Cloud (deps.dev BigQuery)
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
-      - name: Build shards + manifest
+      - name: Build ${{ matrix.ecosystem }} shard
+        env:
+          TOP_N: ${{ github.event.inputs.top_n || '20000' }}
         run: |
           python -m scripts.index_build.build \
+            --ecosystem ${{ matrix.ecosystem }} \
             --out dist/index \
-            --ecosystems python,npm,crates,go \
             --top-n "$TOP_N"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.ecosystem }}
+          path: dist/index/
+          retention-days: 7
+          if-no-files-found: error
+
+  assemble-and-publish:
+    needs: build-shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HF_REPO_ID: priorart/package-index
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install publish dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install huggingface_hub sigstore
+
+      - name: Download all shard artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: shard-*
+          path: dist/index
+          merge-multiple: true
+
+      - name: Assemble manifest
+        run: |
+          python -m scripts.index_build.build \
+            --assemble \
+            --ecosystems python,npm,crates,go,maven,nuget \
+            --out dist/index
 
       - name: Sign manifest with sigstore (keyless, GH OIDC)
         run: |
@@ -59,7 +95,6 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from pathlib import Path
           from huggingface_hub import HfApi
 
           api = HfApi(token=os.environ["HF_TOKEN"])

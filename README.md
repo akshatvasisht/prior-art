@@ -13,7 +13,7 @@
 [![PyPI](https://img.shields.io/pypi/v/priorart-agent)](https://pypi.org/project/priorart-agent/)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-`priorart` is a deterministic tool for package discovery and evaluation. It retrieves candidates from a local, sigstore-verified semantic index across PyPI, npm, crates.io, and pkg.go.dev — no language model at query time — scores them on signals from GitHub, deps.dev, and OpenSSF Scorecard, and returns a weighted health score with a build-or-adopt recommendation. `priorart inspect <package>` scores a single named package.
+`priorart` is a deterministic tool for package discovery and evaluation. It retrieves candidates from a local, sigstore-verified semantic index across PyPI, npm, crates.io, pkg.go.dev, Maven Central, and NuGet — no language model at query time — scores them on signals from GitHub, deps.dev, and OpenSSF Scorecard, and returns a weighted health score with a build-or-adopt recommendation. `priorart inspect <package>` scores a single named package.
 
 ## Research inspiration
 
@@ -52,3 +52,5 @@ pip install priorart-agent
 ## License
 
 See [LICENSE](LICENSE) for details.
+
+Package metadata in the distributed semantic index is sourced from [ecosyste.ms](https://ecosyste.ms) and licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). Redistributing the index shard preserves that license.

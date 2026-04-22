@@ -26,12 +26,12 @@ tests/
 ├── test_deps_dev.py               # deps.dev client
 ├── test_find_alternatives.py      # Pipeline orchestration
 ├── test_github_client.py          # GitHub client and identity verification
-├── test_index_build_fetch.py      # BigQuery fetcher dedup and fallback
+├── test_index_build_fetch.py      # ecosyste.ms fetcher dedup and fallback
 ├── test_index_download.py         # Hugging Face Hub download and sigstore verification
 ├── test_ingest_repo.py            # Ingestion entry point
 ├── test_ingestion.py              # Clone, injection scanning, monorepo detection
 ├── test_inspect.py                # Single-package evaluation
-├── test_registry.py               # Registry clients (PyPI, npm, crates.io, pkg.go.dev)
+├── test_registry.py               # Registry clients (PyPI, npm, crates.io, pkg.go.dev, Maven Central, NuGet)
 ├── test_retrieval.py              # Semantic retrieval and registry fallback
 ├── test_scorecard_client.py       # OpenSSF Scorecard client
 └── test_scoring.py                # Five-dimension scorer

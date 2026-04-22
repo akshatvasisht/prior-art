@@ -34,7 +34,7 @@ def find_alternatives(
     NOT for project-specific logic or when user names a specific library.
 
     Args:
-        language: Programming language (python, javascript, typescript, go, rust)
+        language: Programming language (python, javascript, typescript, go, rust, java, kotlin, scala, csharp, dotnet, fsharp)
         task_description: Capability description (e.g., "http client", "jwt parser")
         explain: Include detailed scoring breakdown
         lite: Skip the semantic index download; use live registry search instead

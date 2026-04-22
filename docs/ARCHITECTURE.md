@@ -16,7 +16,7 @@ src/priorart/
 ├── core/
 │   ├── retrieval.py          # Semantic HNSW query + registry fallback
 │   ├── index_download.py     # Hugging Face Hub download + sigstore verification
-│   ├── registry.py           # PyPI, npm, crates.io, pkg.go.dev clients
+│   ├── registry.py           # PyPI, npm, crates.io, pkg.go.dev, Maven Central, NuGet clients
 │   ├── github_client.py      # GitHub API with rate-limit handling
 │   ├── deps_dev.py           # deps.dev client
 │   ├── scorecard_client.py   # OpenSSF Scorecard client

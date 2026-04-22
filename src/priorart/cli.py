@@ -79,7 +79,7 @@ def find(
     """Find alternative packages for a given task.
 
     Args:
-        language: Programming language (python, javascript, typescript, go, rust)
+        language: Programming language (python, javascript, typescript, go, rust, java, kotlin, scala, csharp, dotnet, fsharp)
         task: Natural language description of the capability needed
         explain: Whether to include detailed scoring breakdown
         output_json: Whether to output results as JSON
