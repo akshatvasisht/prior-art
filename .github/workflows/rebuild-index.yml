@@ -15,10 +15,18 @@ permissions:
   id-token: write  # required for sigstore keyless signing (assemble job)
   contents: read
 
+concurrency:
+  # Serialize overlapping rebuilds; queue rather than cancel so in-flight
+  # embed work on prior dispatches isn't discarded.
+  group: rebuild-index
+  cancel-in-progress: false
+
 jobs:
   build-shard:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Upper bound covering fetch retries plus CPU embed pass; individual
+    # shards finish well under this in normal operation.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:

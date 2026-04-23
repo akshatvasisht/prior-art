@@ -50,8 +50,10 @@ ECOSYSTEM_CONFIG = {
 
 PER_PAGE = 1000
 REQUEST_TIMEOUT = 60
-MAX_RETRIES = 3
-RETRY_BACKOFF_SECONDS = 5
+# ecosyste.ms maven/nuget backends return intermittent 5xx on deep pages;
+# extended backoff is required to keep primary-lane shards from truncating.
+MAX_RETRIES = 5
+RETRY_BACKOFF_SECONDS = 10
 
 
 def _fixture_path(ecosystem: str) -> Path | None:

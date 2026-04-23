@@ -142,7 +142,6 @@ def sample_config():
         },
         "versioning": {
             "recency_halflife_days": 180,
-            "is_current_partial_score": 0.5,
         },
         "dependency_health": {
             "dep_health_deprecated_threshold": 2,

@@ -41,9 +41,15 @@ logger = logging.getLogger(__name__)
 EMBED_MODEL_NAME = "BAAI/bge-small-en-v1.5"
 EMBED_DIM = 384
 
-# Batch size handed to fastembed. 512 amortizes kernel-dispatch overhead better
-# than 256 on CPU ORT with the small BGE model; memory cost is ~1.5 MB/batch.
-EMBED_BATCH_SIZE = 512
+# Peak CPU throughput for quantized BGE-small is measured at batch=128
+# (Intel/Haystack fastRAG benchmark); larger batches trade throughput for
+# memory without speed gains on low-vCPU runners.
+EMBED_BATCH_SIZE = 128
+
+# Data-parallel worker count. 0 = use all available CPU cores, which is the
+# setting fastembed documents as recommended for offline bulk encoding
+# (qdrant/fastembed TextEmbedding.embed docstring).
+EMBED_PARALLEL = 0
 
 
 def _sha256(path: Path) -> str:
@@ -93,15 +99,33 @@ def build_shard(ecosystem: str, out_dir: Path, top_n: int) -> dict:
 
     logger.info(f"{ecosystem}: {len(records)} unique records to embed")
 
+    # Guard against shipping a degraded shard when the upstream registry
+    # source collapses mid-fetch. Half of top_n is the smallest count we
+    # can still defend as a useful slice; below that we fail the job so
+    # `needs: build-shard` blocks the publish step and the prior index
+    # remains authoritative.
+    min_records = max(top_n // 2, 1000)
+    if len(records) < min_records:
+        raise RuntimeError(
+            f"{ecosystem}: only {len(records)} records fetched "
+            f"(required >= {min_records}). Upstream registry source "
+            f"likely unavailable; aborting to preserve prior index."
+        )
+
     model = TextEmbedding(model_name=EMBED_MODEL_NAME)
     index = Index(ndim=EMBED_DIM, metric="cos", dtype="i8")
 
     texts = [f"{r['name']}: {r['description']}" for r in records]
+    total = len(records)
     # Stream embeddings through the index + metadata writer in a single pass.
-    # Fastembed handles batching internally; ONNX Runtime threads across cores.
+    # Fastembed handles batching and data-parallel worker dispatch internally.
     with metadata_path.open("w", encoding="utf-8") as meta_f:
         for key, (rec, vec) in enumerate(
-            zip(records, model.embed(texts, batch_size=EMBED_BATCH_SIZE), strict=True)
+            zip(
+                records,
+                model.embed(texts, batch_size=EMBED_BATCH_SIZE, parallel=EMBED_PARALLEL),
+                strict=True,
+            )
         ):
             index.add(key, _quantize_int8_row(vec))
             meta_f.write(
@@ -116,6 +140,10 @@ def build_shard(ecosystem: str, out_dir: Path, top_n: int) -> dict:
                 )
                 + "\n"
             )
+            # Fastembed's .embed() emits no progress; log periodically so
+            # long runs remain observable and pinpoint where timeouts land.
+            if (key + 1) % 1000 == 0:
+                logger.info(f"{ecosystem}: embedded {key + 1}/{total}")
 
     index.save(str(usearch_path))
 

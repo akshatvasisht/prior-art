@@ -46,8 +46,7 @@ class ScoredPackage:
     # Basic info
     description: str | None = None
     age_years: float = 0.0
-    latest_compatible_version: str | None = None
-    version_compatible: bool = True
+    latest_version: str | None = None
 
     # Adoption signals
     weekly_downloads: int | None = None
@@ -232,8 +231,7 @@ class PackageScorer:
             registry=package_data.get("registry", ""),
             description=package_data.get("description"),
             age_years=age_years,
-            latest_compatible_version=package_data.get("latest_version"),
-            version_compatible=package_data.get("version_compatible", True),
+            latest_version=package_data.get("latest_version"),
             weekly_downloads=package_data.get("weekly_downloads"),
             reverse_dep_count=package_data.get("reverse_dep_count", 0),
             fork_to_star_ratio=package_data.get("fork_to_star_ratio"),
@@ -367,17 +365,12 @@ class PackageScorer:
         Returns:
             Tuple of (score, details)
         """
-        # Recency of compatible version (fall back to 365 days if missing or None)
+        # Recency of latest release (fall back to 365 days if missing or None)
         days_since_release = data.get("days_since_compatible_release")
         if days_since_release is None:
             days_since_release = 365
         halflife = self.versioning_config["recency_halflife_days"]
         recency_score = 1.0 / (1.0 + days_since_release / halflife)
-
-        # Is compatible version current?
-        is_current = 1.0
-        if not data.get("version_compatible", True):
-            is_current = self.versioning_config["is_current_partial_score"]
 
         # Release regularity
         release_cv = data.get("release_cv")
@@ -390,14 +383,11 @@ class PackageScorer:
         stability_score = 1.0 / (1.0 + major_versions_per_year)
 
         # Combined versioning score
-        versioning_score = (
-            0.35 * recency_score * is_current + 0.35 * regularity_score + 0.30 * stability_score
-        )
+        versioning_score = 0.35 * recency_score + 0.35 * regularity_score + 0.30 * stability_score
 
         details = {
             "days_since_release": days_since_release,
             "recency_score": recency_score,
-            "is_current": is_current,
             "release_cv": release_cv,
             "regularity_score": regularity_score,
             "major_versions_per_year": major_versions_per_year,

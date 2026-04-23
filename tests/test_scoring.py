@@ -284,22 +284,6 @@ def test_floor_filter_star_fallback(sample_config):
     assert len(scorer.apply_floor_filter(fails)) == 0
 
 
-def test_versioning_incompatible(sample_config, sample_package_data):
-    """version_compatible=False uses is_current_partial_score."""
-    scorer = PackageScorer(sample_config)
-
-    compatible_data = sample_package_data.copy()
-    compatible_data["version_compatible"] = True
-    scored_compat = scorer.score_package(compatible_data, explain=True)
-
-    incompatible_data = sample_package_data.copy()
-    incompatible_data["version_compatible"] = False
-    scored_incompat = scorer.score_package(incompatible_data, explain=True)
-
-    # Incompatible version should score lower in versioning
-    assert scored_incompat.score_breakdown.versioning < scored_compat.score_breakdown.versioning
-
-
 def test_abandonment_early_warning_ratio(sample_config, sample_package_data):
     """Between early_warning and dormant, high open/closed ratio triggers abandonment."""
     scorer = PackageScorer(sample_config)

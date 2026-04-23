@@ -46,7 +46,6 @@ adoption:
 # Versioning dimension parameters
 versioning:
   recency_halflife_days: 180            # Mens et al. 2014: central estimate; tune per ecosystem
-  is_current_partial_score: 0.5         # Partial credit for legacy LTS branches
 
 # Dependency health parameters
 dependency_health:
