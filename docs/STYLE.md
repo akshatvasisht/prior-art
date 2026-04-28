@@ -23,8 +23,6 @@ No debate traces, failed-attempt logs, or editing notes in committed code.
 - **Correct:** `# Stagger requests to respect GitHub secondary rate limits`
 - **Incorrect:** `# Tried parallel requests but kept hitting rate limits`
 
----
-
 ## Code Comments
 
 ### When to Comment
@@ -65,8 +63,6 @@ for pkg in packages:
 # TODO: This is hacky, need to refactor
 # Tried using X but it didn't work
 ```
-
----
 
 ## Tooling
 

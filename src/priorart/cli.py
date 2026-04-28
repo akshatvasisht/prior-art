@@ -249,7 +249,12 @@ def cache_info() -> None:
 
 
 @cli.command()
-@click.option("--limit", default=30, type=int, help="Maximum packages to cache per language")
+@click.option(
+    "--limit",
+    default=30,
+    type=click.IntRange(min=1),
+    help="Maximum packages to cache per language",
+)
 def seed_generate(limit: int) -> None:  # pragma: no cover
     """Generate seed cache with top packages from each ecosystem.
 

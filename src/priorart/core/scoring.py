@@ -276,7 +276,10 @@ class PackageScorer:
         mttr_median = data.get("mttr_median_days")
         mttr_mad = data.get("mttr_mad")
 
-        if mttr_median is None:
+        if mttr_median is None or mttr_median < 0:
+            # Negative resolution_days are possible when issue.closed_at < issue.created_at
+            # (clock skew in github_client.py); math.log(1.0 + mttr_median) would raise
+            # ValueError for mttr_median < -1.
             return null_scores["issues_disabled"], {"state": "no_data"}
 
         # MTTR score: faster response = higher score
@@ -481,7 +484,10 @@ class PackageScorer:
         if first_release.tzinfo is None:
             first_release = first_release.replace(tzinfo=timezone.utc)
 
-        age_days = (datetime.now(timezone.utc) - first_release).days
+        # Clamp to 0 to handle future-dated releases (clock skew, bad registry
+        # data). A negative age would invert the confidence multiplier blend in
+        # calculate_score and over-weight the neutral prior.
+        age_days = max(0, (datetime.now(timezone.utc) - first_release).days)
         return age_days / 365.0
 
     def _get_recommendation(self, health_score: int) -> str:

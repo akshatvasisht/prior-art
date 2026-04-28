@@ -20,14 +20,6 @@ from .utils import load_config
 logger = logging.getLogger(__name__)
 
 
-_LANG_FOR_REGISTRY = {
-    "pypi": "python",
-    "npm": "javascript",
-    "cargo": "rust",
-    "go": "go",
-}
-
-
 def _infer_registry(language: str | None, package_name: str) -> tuple[str, str]:
     """Return (language, registry) pair, inferring from the package name shape if needed."""
     if language:
@@ -125,6 +117,11 @@ def inspect_package(
                 "activity_regularity": scored.score_breakdown.activity_regularity,
                 "dependency_health": scored.score_breakdown.dependency_health,
             }
+
+            if scored.score_breakdown.reliability_details:
+                package_dict["reliability_details"] = scored.score_breakdown.reliability_details
+            if scored.score_breakdown.adoption_details:
+                package_dict["adoption_details"] = scored.score_breakdown.adoption_details
 
         return {"status": "success", "package": package_dict}
 

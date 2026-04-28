@@ -12,6 +12,57 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _annotation_str(arg: ast.arg) -> str:
+    if not arg.annotation:
+        return ""
+    try:
+        return f": {ast.unparse(arg.annotation)}"
+    except Exception:  # pragma: no cover
+        return ""
+
+
+def _default_str(default: ast.expr) -> str:
+    try:
+        return ast.unparse(default)
+    except Exception:  # pragma: no cover
+        return "..."
+
+
+def _format_arguments(args: ast.arguments) -> str:
+    """Format an ast.arguments node as a PEP-8-styled parameter list."""
+    parts: list[str] = []
+
+    all_positional = args.posonlyargs + args.args
+    n_required = len(all_positional) - len(args.defaults)
+
+    for i, arg in enumerate(all_positional):
+        s = arg.arg + _annotation_str(arg)
+        if i >= n_required:
+            d = _default_str(args.defaults[i - n_required])
+            s += f" = {d}" if arg.annotation else f"={d}"
+        parts.append(s)
+        if args.posonlyargs and i == len(args.posonlyargs) - 1:
+            parts.append("/")
+
+    if args.vararg:
+        parts.append("*" + args.vararg.arg + _annotation_str(args.vararg))
+    elif args.kwonlyargs:
+        parts.append("*")
+
+    for i, arg in enumerate(args.kwonlyargs):
+        s = arg.arg + _annotation_str(arg)
+        kw_default = args.kw_defaults[i]
+        if kw_default is not None:
+            d = _default_str(kw_default)
+            s += f" = {d}" if arg.annotation else f"={d}"
+        parts.append(s)
+
+    if args.kwarg:
+        parts.append("**" + args.kwarg.arg + _annotation_str(args.kwarg))
+
+    return ", ".join(parts)
+
+
 class InterfaceExtractor:
     """Extracts public interfaces from source code."""
 
@@ -25,6 +76,10 @@ class InterfaceExtractor:
             Extracted interface (signatures and docstrings)
         """
         try:
+            # Strip UTF-8 BOM (﻿); ast.parse rejects it as a non-printable
+            # character even though it's a valid encoding marker.
+            if content.startswith("﻿"):
+                content = content[1:]
             tree = ast.parse(content)
             lines = []
 
@@ -78,27 +133,9 @@ class InterfaceExtractor:
 
         return "\n".join(lines)
 
-    def _extract_function(self, node: ast.FunctionDef) -> str:
+    def _extract_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
         """Extract function signature and docstring."""
-        # Get signature
-        args = []
-        for arg in node.args.args:
-            arg_str = arg.arg
-            if arg.annotation:
-                try:
-                    arg_str += f": {ast.unparse(arg.annotation)}"
-                except Exception:  # pragma: no cover
-                    pass
-            args.append(arg_str)
-
-        # Add defaults
-        defaults = node.args.defaults
-        if defaults:
-            for i, default in enumerate(defaults, len(args) - len(defaults)):
-                try:
-                    args[i] += f" = {ast.unparse(default)}"
-                except Exception:  # pragma: no cover
-                    args[i] += " = ..."
+        arg_str = _format_arguments(node.args)
 
         # Return type annotation
         returns = ""
@@ -108,7 +145,7 @@ class InterfaceExtractor:
             except Exception:  # pragma: no cover
                 pass
 
-        signature = f"def {node.name}({', '.join(args)}){returns}:"
+        signature = f"def {node.name}({arg_str}){returns}:"
 
         # Get docstring
         docstring = ast.get_docstring(node)

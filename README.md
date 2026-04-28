@@ -1,9 +1,9 @@
 <p align="center">
-  <img 
-    width="200" 
-    height="200" 
-    alt="Prior Art Logo" 
-    src="https://raw.githubusercontent.com/akshatvasisht/prior-art/main/docs/images/logo.png" 
+  <img
+    width="200"
+    height="200"
+    alt="Prior Art Logo"
+    src="https://raw.githubusercontent.com/akshatvasisht/prior-art/main/docs/images/logo.png"
   />
 </p>
 

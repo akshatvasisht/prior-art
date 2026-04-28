@@ -306,6 +306,41 @@ def configure(host: str, port: int = 8080, debug: bool = False) -> None:
     assert "port: int = 8080" in result
 
 
+def test_extract_python_all_arg_variants(extractor):
+    """Signature extraction must preserve posonly, vararg, kwonly, and kwargs."""
+    code = '''
+def variants(pos, /, regular, default=10, *args, kw_required, kw_default=20, **kwargs):
+    """Docstring."""
+    pass
+'''
+    result = extractor.extract_python(code)
+    assert "pos, /" in result
+    assert "default=10" in result
+    assert "*args" in result
+    assert "kw_required" in result
+    assert "kw_default=20" in result
+    assert "**kwargs" in result
+
+
+def test_extract_python_kwonly_without_vararg(extractor):
+    """Bare `*` separator must precede kw-only args when no *args is present."""
+    code = '''
+def configure(host, *, port=8080, debug=False):
+    """Docstring."""
+    pass
+'''
+    result = extractor.extract_python(code)
+    assert "host, *, port=8080, debug=False" in result
+
+
+def test_extract_python_strips_utf8_bom(extractor):
+    """BOM-prefixed source must parse without falling back to regex."""
+    code = '﻿def hello():\n    """Greet."""\n    return \'hi\'\n'
+    result = extractor.extract_python(code)
+    assert "def hello():" in result
+    assert "Greet." in result
+
+
 def test_extract_python_exception_fallback(extractor):
     """Non-syntax exception triggers fallback extraction."""
     # Provide valid Python that would parse but make the AST traversal fail

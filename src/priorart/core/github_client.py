@@ -238,11 +238,7 @@ class GitHubClient:
             unique_committers = set()
             recent_cutoff = datetime.now(timezone.utc) - timedelta(days=90)
 
-            page_count = 0
             for commit in commits:
-                if page_count >= 5:  # Limit pages to avoid timeout
-                    break  # pragma: no cover
-
                 commit_date = commit.commit.author.date
                 week_key = commit_date.isocalendar()[:2]  # (year, week)
                 weekly_counts[week_key] = weekly_counts.get(week_key, 0) + 1

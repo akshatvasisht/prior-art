@@ -68,8 +68,6 @@ result = find_alternatives(
 {"status": "below_threshold", "message": "All candidates were below minimum download/star thresholds"}
 ```
 
----
-
 ### `inspect_package()`
 
 Score a single named package without retrieval.
@@ -93,8 +91,6 @@ result = inspect_package(
 | `explain` | `bool` | No | Include per-dimension score breakdowns (default: `False`) |
 
 **Returns:** `{"status": "success", "package": {...}}`, where `package` has the same schema as an entry in `find_alternatives.packages`.
-
----
 
 ### `ingest_repo()`
 
@@ -130,8 +126,6 @@ result = ingest_repo(
     "content_warnings": []
 }
 ```
-
----
 
 ## CLI Reference
 
@@ -191,8 +185,6 @@ Deletes the cache database file.
 priorart cache-clear
 ```
 
----
-
 ## MCP Server
 
 The MCP server exposes `find_alternatives`, `evaluate_package`, and `ingest_repo` as tools with the same parameters and return values as the Python API. (`evaluate_package` is the MCP-side name for `inspect_package`.)
@@ -203,8 +195,6 @@ The MCP server exposes `find_alternatives`, `evaluate_package`, and `ingest_repo
 {"repo_url": "https://github.com/psf/requests", "language": "python"}
 ```
 
----
-
 ## Environment Variables
 
 | Variable | Description | Required |
@@ -212,8 +202,6 @@ The MCP server exposes `find_alternatives`, `evaluate_package`, and `ingest_repo
 | `GITHUB_TOKEN` | GitHub Personal Access Token | Yes (for GitHub signals) |
 
 Without `GITHUB_TOKEN`, GitHub signals are skipped and packages score with registry/deps.dev data only.
-
----
 
 ## Rate Limits
 

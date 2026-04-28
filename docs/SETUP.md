@@ -6,8 +6,6 @@
 - **Git**
 - **GitHub Personal Access Token** (required for GitHub API access)
 
----
-
 ## Installation
 
 ```bash
@@ -26,8 +24,6 @@ pip install -e ".[dev]"
 priorart --version
 ```
 
----
-
 ## GitHub Token Setup (required)
 
 `priorart find` requires `GITHUB_TOKEN`. Without it, registry-only signals rarely clear the floor filter and most queries return no results.
@@ -45,8 +41,6 @@ echo 'export GITHUB_TOKEN="your_token_here"' >> ~/.bashrc
 ```
 
 `priorart ingest` does not require a token (it only clones via git).
-
----
 
 ## MCP Server Setup
 
@@ -70,16 +64,12 @@ Add to your Claude Desktop config:
 
 Restart Claude Desktop. The `find_alternatives`, `evaluate_package`, and `ingest_repo` tools appear in the MCP servers list.
 
----
-
 ## Cache Directory
 
 Cache is stored at the platform-specific location via `platformdirs`:
 - **Linux:** `~/.cache/priorart/`
 - **macOS:** `~/Library/Caches/priorart/`
 - **Windows:** `%LOCALAPPDATA%\priorart\cache\`
-
----
 
 ## Development
 
@@ -97,8 +87,6 @@ mypy src/priorart
 ```
 
 Dev dependencies: `pytest`, `pytest-asyncio`, `pytest-cov`, `ruff`, `mypy`
-
----
 
 ## Troubleshooting
 
