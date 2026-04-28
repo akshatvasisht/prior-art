@@ -31,6 +31,8 @@ import argparse
 import hashlib
 import json
 import logging
+import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -183,25 +185,102 @@ def build_all(out_dir: Path, ecosystems: list[str], top_n: int) -> Path:
     return _write_manifest(manifest, out_dir)
 
 
+def _fetch_prior_shard(out_dir: Path, ecosystem: str) -> dict | None:
+    """Download the prior shard for ``ecosystem`` from the published HF Hub
+    dataset and copy it into ``out_dir``. Returns the prior manifest entry
+    (preserving sha256s and record_count) on success, ``None`` on any failure.
+    """
+    try:
+        from huggingface_hub import hf_hub_download  # type: ignore
+    except ImportError:
+        logger.warning("huggingface_hub not installed; cannot fetch prior shards")
+        return None
+
+    repo_id = os.environ.get("HF_REPO_ID", "priorart/package-index")
+    token = os.environ.get("HF_TOKEN") or None
+    # Cache outside out_dir so the hf_hub blobs aren't swept up by upload_folder.
+    cache_dir = str(out_dir.parent / ".prior-cache")
+
+    try:
+        manifest_path = hf_hub_download(
+            repo_id=repo_id,
+            filename="manifest.json",
+            repo_type="dataset",
+            cache_dir=cache_dir,
+            token=token,
+        )
+        prior = json.loads(Path(manifest_path).read_text())
+        prior_entry = prior.get("shards", {}).get(ecosystem)
+        if not prior_entry:
+            logger.warning("prior manifest has no entry for %s", ecosystem)
+            return None
+
+        for fname in (prior_entry["usearch"], prior_entry["metadata"]):
+            local = hf_hub_download(
+                repo_id=repo_id,
+                filename=fname,
+                repo_type="dataset",
+                cache_dir=cache_dir,
+                token=token,
+            )
+            shutil.copyfile(local, out_dir / fname)
+
+        return {
+            **prior_entry,
+            "stale_from_version": prior.get("version"),
+            "stale_from_created_at": prior.get("created_at"),
+        }
+    except Exception as e:
+        logger.warning("could not fetch prior shard for %s: %s", ecosystem, e)
+        return None
+
+
 def assemble_manifest(out_dir: Path, ecosystems: list[str]) -> Path:
-    """Assemble manifest.json from already-built shard files (matrix finalizer)."""
+    """Assemble manifest.json from shard files, reusing prior shards from
+    HF Hub for any ecosystem not rebuilt this run.
+
+    Refuses to publish if zero shards were rebuilt — total upstream collapse
+    must preserve the prior published index, not republish a fully-stale copy.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
     manifest = _manifest_skeleton()
+    fresh: list[str] = []
+    stale: list[str] = []
+
     for ecosystem in ecosystems:
         usearch_path, metadata_path = _shard_paths(out_dir, ecosystem)
-        if not usearch_path.exists() or not metadata_path.exists():
+        if usearch_path.exists() and metadata_path.exists():
+            with metadata_path.open("r", encoding="utf-8") as f:
+                record_count = sum(1 for line in f if line.strip())
+            manifest["shards"][ecosystem] = {
+                "usearch": usearch_path.name,
+                "metadata": metadata_path.name,
+                "usearch_sha256": _sha256(usearch_path),
+                "metadata_sha256": _sha256(metadata_path),
+                "record_count": record_count,
+            }
+            fresh.append(ecosystem)
+            continue
+
+        prior_entry = _fetch_prior_shard(out_dir, ecosystem)
+        if prior_entry is None:
             raise FileNotFoundError(
-                f"Missing shard files for {ecosystem}: "
+                f"No fresh build and no prior shard available for {ecosystem}: "
                 f"expected {usearch_path.name} and {metadata_path.name} in {out_dir}"
             )
-        with metadata_path.open("r", encoding="utf-8") as f:
-            record_count = sum(1 for line in f if line.strip())
-        manifest["shards"][ecosystem] = {
-            "usearch": usearch_path.name,
-            "metadata": metadata_path.name,
-            "usearch_sha256": _sha256(usearch_path),
-            "metadata_sha256": _sha256(metadata_path),
-            "record_count": record_count,
-        }
+        manifest["shards"][ecosystem] = prior_entry
+        stale.append(ecosystem)
+
+    if not fresh:
+        raise RuntimeError(
+            "Refusing to publish: no shards were rebuilt this run. "
+            "Total upstream collapse — preserving the prior published index."
+        )
+
+    if stale:
+        manifest["stale_shards"] = stale
+        logger.warning("Publishing with stale shards: %s", stale)
+
     return _write_manifest(manifest, out_dir)
 
 

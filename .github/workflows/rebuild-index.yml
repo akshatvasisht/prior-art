@@ -61,10 +61,15 @@ jobs:
 
   assemble-and-publish:
     needs: build-shard
+    # Run even when some shards failed; the assemble step reuses prior shards
+    # from HF Hub for any ecosystem not rebuilt this run, and refuses to
+    # publish only if zero shards were rebuilt.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       HF_REPO_ID: priorart/package-index
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -98,8 +103,6 @@ jobs:
             dist/index/manifest.json
 
       - name: Upload to Hugging Face Hub
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           python - <<'PY'
           import os

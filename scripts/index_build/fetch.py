@@ -55,6 +55,14 @@ REQUEST_TIMEOUT = 60
 MAX_RETRIES = 5
 RETRY_BACKOFF_SECONDS = 10
 
+# Cold popularity-sort queries on the largest registries (npm 5.5M packages,
+# proxy.golang.org) routinely exceed ecosyste.ms's ~30s upstream proxy timeout
+# and surface as 500s. A successful query is cached and served fast on
+# subsequent requests, so a best-effort pre-flight pass populates that cache
+# before the real fetch loop runs.
+WARMUP_TIMEOUT = 120
+WARMUP_PAUSE_SECONDS = 5
+
 
 def _fixture_path(ecosystem: str) -> Path | None:
     base = os.environ.get("PRIORART_INDEX_FIXTURE")
@@ -110,6 +118,47 @@ def _get_with_retry(client: httpx.Client, url: str, params: dict) -> list[dict] 
         if attempt < MAX_RETRIES:
             time.sleep(RETRY_BACKOFF_SECONDS * attempt)
     return None
+
+
+def _warm_cache(ecosystem: str, top_n: int, recency_n: int) -> None:
+    """Pre-touch each (sort, page) URL we'll need so ecosyste.ms's page cache
+    is warm before the real fetch loop runs. Failures are logged and ignored.
+    """
+    if os.environ.get("PRIORART_SKIP_WARMUP"):
+        return
+
+    cfg = ECOSYSTEM_CONFIG[ecosystem]
+    slug = cfg["slug"]
+    url = f"{ECOSYSTE_MS_API}/registries/{slug}/packages"
+
+    pages: list[tuple[str, int]] = []
+    pop_pages = max(1, (top_n + PER_PAGE - 1) // PER_PAGE)
+    for p in range(1, pop_pages + 1):
+        pages.append((cfg["sort"], p))
+    if recency_n > 0:
+        rec_pages = max(1, (recency_n + PER_PAGE - 1) // PER_PAGE)
+        for p in range(1, rec_pages + 1):
+            pages.append(("latest_release_published_at", p))
+
+    logger.info("ecosyste.ms %s: warming cache for %d pages", ecosystem, len(pages))
+    with httpx.Client(timeout=WARMUP_TIMEOUT) as client:
+        for sort, page in pages:
+            params = {"sort": sort, "order": "desc", "per_page": PER_PAGE, "page": page}
+            try:
+                resp = client.get(url, params=params)
+                logger.info(
+                    "warm-up %s sort=%s page=%d -> %d (%.1fs)",
+                    ecosystem,
+                    sort,
+                    page,
+                    resp.status_code,
+                    resp.elapsed.total_seconds(),
+                )
+            except httpx.RequestError as e:
+                logger.info("warm-up %s sort=%s page=%d -> error: %s", ecosystem, sort, page, e)
+
+    if WARMUP_PAUSE_SECONDS > 0:
+        time.sleep(WARMUP_PAUSE_SECONDS)
 
 
 def _iter_ecosystems_ms(ecosystem: str, top_n: int, sort_key: str | None = None) -> Iterator[dict]:
@@ -207,6 +256,8 @@ def fetch_ecosystem(ecosystem: str, top_n: int = 20_000, recency_n: int = 2_000)
         logger.info(f"Using fixture for {ecosystem} ({len(fixture)} records)")
         yield from fixture
         return
+
+    _warm_cache(ecosystem, top_n, recency_n)
 
     seen: set[tuple[str, str]] = set()
     for rec in _iter_deps_dev(ecosystem, top_n):
