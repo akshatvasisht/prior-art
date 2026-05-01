@@ -48,10 +48,12 @@ EMBED_DIM = 384
 # memory without speed gains on low-vCPU runners.
 EMBED_BATCH_SIZE = 128
 
-# Data-parallel worker count. 0 = use all available CPU cores, which is the
-# setting fastembed documents as recommended for offline bulk encoding
-# (qdrant/fastembed TextEmbedding.embed docstring).
-EMBED_PARALLEL = 0
+# Data-parallel worker count. Each worker holds its own ONNX session
+# (~300-500 MB) plus tokenizer state. On a 4-vCPU 7 GB ubuntu-latest runner
+# the parent process already holds ~2 GB of snapshot rows during sort, so
+# spawning one worker per core (parallel=0) pushed peak memory past the cap
+# and the kernel killed mid-embed for the larger ecosystems.
+EMBED_PARALLEL = 2
 
 
 def _sha256(path: Path) -> str:

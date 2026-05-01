@@ -101,6 +101,32 @@ jobs:
             --ecosystems python,npm,crates,go,maven,nuget \
             --out dist/index
 
+      - name: Write README to disable HF dataset viewer
+        # The repo holds heterogeneous artifacts (manifest.json, .usearch
+        # binaries, per-ecosystem metadata.jsonl) and isn't loadable via
+        # `datasets.load_dataset`. The viewer's auto-schema inference picks
+        # one shape and 500s on the others; disable it.
+        run: |
+          cat > dist/index/README.md <<'EOF'
+          ---
+          viewer: false
+          ---
+
+          # priorart package index
+
+          Sigstore-signed HNSW shards consumed by the [priorart](https://github.com/akshatvasisht/prior-art) CLI / MCP server.
+
+          Files in this repo are not designed for `datasets.load_dataset`. The
+          consumer fetches per-file via `huggingface_hub.hf_hub_download` and
+          verifies `manifest.sigstore.json` against a pinned GitHub Actions
+          OIDC signer identity before reading any shard.
+
+          - `manifest.json` — build metadata, sha256-keyed shard index.
+          - `manifest.sigstore.json` — sigstore bundle for the manifest.
+          - `{ecosystem}.usearch` — int8 HNSW shard.
+          - `{ecosystem}.metadata.jsonl` — `key` → record sidecar.
+          EOF
+
       - name: Sign manifest with sigstore (keyless, GH OIDC)
         run: |
           sigstore sign \
