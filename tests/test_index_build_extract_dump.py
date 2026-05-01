@@ -65,6 +65,39 @@ def test_extract_filters_inactive_status(tmp_path: Path):
     assert [r["name"] for r in py] == ["live"]
 
 
+def test_extract_keeps_null_and_empty_status(tmp_path: Path):
+    """Pre-default rows store status as NULL; they must survive the filter."""
+    from scripts.index_build.extract_dump import extract
+
+    stream = _stream(
+        "COPY public.packages (id, name, ecosystem, status, downloads, dependent_packages_count, dependent_repos_count) FROM stdin;",
+        "1\tnullstatus\tpypi\t\\N\t100\t1\t0",
+        "2\temptystatus\tpypi\t\t100\t1\t0",
+        "3\twithdrawn\tpypi\twithdrawn\t100\t1\t0",
+        "\\.",
+    )
+    extract(stream, tmp_path)
+    py = _read_jsonl(tmp_path / "python.jsonl")
+    assert [r["name"] for r in py] == ["nullstatus", "emptystatus"]
+
+
+def test_extract_aborts_when_zero_matches_after_threshold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """If the filter rejects every row up to EARLY_EXIT_THRESHOLD, fail fast."""
+    from scripts.index_build import extract_dump as mod
+
+    monkeypatch.setattr(mod, "EARLY_EXIT_THRESHOLD", 5)
+    rows = [f"{i}\tpkg{i}\trubygems\tactive\t1\t0\t0" for i in range(10)]
+    stream = _stream(
+        "COPY public.packages (id, name, ecosystem, status, downloads, dependent_packages_count, dependent_repos_count) FROM stdin;",
+        *rows,
+        "\\.",
+    )
+    with pytest.raises(RuntimeError, match="filter logic is broken"):
+        mod.extract(stream, tmp_path)
+
+
 def test_extract_filters_unknown_ecosystem(tmp_path: Path):
     from scripts.index_build.extract_dump import extract
 

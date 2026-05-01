@@ -6,7 +6,7 @@ Reads `pg_restore --data-only` SQL output from stdin. The dump's table order is
 not guaranteed, so we scan COPY headers and only consume the ``public.packages``
 block — every other table is skipped row-by-row without parsing.
 
-Output JSONL fields per package (one of our 6 ecosystems, ``status='active'``):
+Output JSONL fields per package (one of our 6 ecosystems, status not "removed"):
 
     name, registry, description, repository_url, homepage,
     downloads, dependent_packages_count, dependent_repos_count,
@@ -40,6 +40,11 @@ ECOSYSTEM_MAP = {
     "maven": ("maven", "maven"),
     "nuget": ("nuget", "nuget"),
 }
+
+# Sized to hit before any tracked ecosystem could legitimately have zero
+# matches — even the smallest registry we track holds well over this. Zero
+# matches by here means filter drift, not data.
+EARLY_EXIT_THRESHOLD = 500_000
 
 # Postgres COPY text-format escape sequences. \N is special-cased — it only
 # represents NULL when it is the entire field, never embedded.
@@ -102,8 +107,8 @@ def extract(stream: Iterable[str], out_dir: Path) -> dict[str, int]:
                     continue
                 table, cols = m.group(1), m.group(2)
                 if table != "packages":
-                    # Skip the data block of an unrelated table without parsing
-                    # any fields; just chew through to the COPY terminator.
+                    # Bypass _parse_row for non-target tables — the full dump
+                    # carries 100M+ rows across other tables we'd discard.
                     for inner in stream:
                         if inner.rstrip("\n") == "\\.":
                             break
@@ -120,6 +125,15 @@ def extract(stream: Iterable[str], out_dir: Path) -> dict[str, int]:
             scanned += 1
             if scanned % 250_000 == 0:
                 logger.info("scanned %d rows", scanned)
+            # Fail fast on filter drift: zero matches this far in means
+            # status / ecosystem semantics changed upstream, and the rest of
+            # the scan would yield nothing either.
+            if scanned == EARLY_EXIT_THRESHOLD and sum(counts.values()) == 0:
+                raise RuntimeError(
+                    f"scanned {EARLY_EXIT_THRESHOLD} rows with zero matches in any "
+                    f"tracked ecosystem — filter logic is broken (check status / "
+                    f"ecosystem column values vs ECOSYSTEM_MAP)"
+                )
 
             try:
                 row = _parse_row(raw, columns)
@@ -127,7 +141,11 @@ def extract(stream: Iterable[str], out_dir: Path) -> dict[str, int]:
                 logger.warning("skip malformed row %d: %s", scanned, e)
                 continue
 
-            if row.get("status") != "active":
+            # Status default 'active' was added after the column; pre-existing
+            # rows have NULL. Accept those alongside explicit "active"; reject
+            # only known-removed packages.
+            status = row.get("status")
+            if status not in (None, "", "active"):
                 continue
             ecosystem_string = row.get("ecosystem") or ""
             target = ECOSYSTEM_MAP.get(ecosystem_string)

@@ -31,7 +31,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  DUMP_URL: https://ecosystems-data.s3.amazonaws.com/packages-2026-02-05.tar.gz
+  # Resolved dynamically per run from the open-data index page; see the
+  # "Discover latest dump" step. The S3 bucket itself denies LIST, so we
+  # scrape the human-facing page to track new releases without code edits.
+  OPEN_DATA_INDEX: https://packages.ecosyste.ms/open-data
   HF_REPO_ID: priorart/package-snapshot
 
 jobs:
@@ -41,6 +44,7 @@ jobs:
     outputs:
       should_extract: ${{ steps.check.outputs.should_extract }}
       last_modified: ${{ steps.check.outputs.last_modified }}
+      dump_url: ${{ steps.discover.outputs.dump_url }}
     steps:
       - uses: actions/setup-python@v5
         with:
@@ -49,9 +53,36 @@ jobs:
       - name: Install huggingface_hub
         run: pip install --quiet huggingface_hub
 
+      - name: Discover latest dump
+        id: discover
+        run: |
+          python - <<'PY'
+          import os, re, sys, urllib.request
+          # Cloudflare 403s the default Python-urllib UA; identify the client.
+          req = urllib.request.Request(
+              os.environ["OPEN_DATA_INDEX"],
+              headers={"User-Agent": "priorart-rebuild-index (+https://github.com/akshatvasisht/prior-art)"},
+          )
+          with urllib.request.urlopen(req, timeout=30) as resp:
+              html = resp.read().decode("utf-8", errors="replace")
+          urls = re.findall(
+              r"https://ecosystems-data\.s3\.amazonaws\.com/packages-\d{4}-\d{2}-\d{2}\.tar\.gz",
+              html,
+          )
+          if not urls:
+              print("::error::no dump URLs found on open-data index", file=sys.stderr)
+              sys.exit(1)
+          # YYYY-MM-DD in the filename sorts lexically as date.
+          latest = sorted(set(urls))[-1]
+          print(f"latest dump: {latest}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"dump_url={latest}\n")
+          PY
+
       - name: Compare S3 Last-Modified to HF marker
         id: check
         env:
+          DUMP_URL: ${{ steps.discover.outputs.dump_url }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           FORCE: ${{ inputs.force }}
         run: |
@@ -100,6 +131,7 @@ jobs:
     # S3 fetches.
     timeout-minutes: 180
     env:
+      DUMP_URL: ${{ needs.probe.outputs.dump_url }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v4
@@ -117,9 +149,9 @@ jobs:
       - name: Determine inner SQL filename
         id: inner
         run: |
-          # The tar archive nests the dump under a dated directory; extract
-          # the first .sql entry's path so the streaming step doesn't
-          # hard-code the date.
+          # The tar archive nests the dump under a dated directory whose
+          # name varies per release; resolve the .sql entry from the first
+          # 2 MB of the stream so the streaming step stays release-agnostic.
           inner=$(curl -sL --range 0-2097151 "$DUMP_URL" \
             | tar -tzf - 2>/dev/null \
             | grep -E '\.sql$' \
@@ -136,9 +168,13 @@ jobs:
           INNER: ${{ steps.inner.outputs.path }}
         run: |
           mkdir -p out
-          set -o pipefail
+          # Pipefail off: extract_dump.py exits cleanly the moment it sees
+          # the end of the public.packages COPY block. That close on stdin
+          # raises SIGPIPE upstream in pg_restore / tar / curl, which pipefail
+          # would propagate as a job failure even though our work succeeded.
+          # The Smoke-check step downstream is the real correctness guard.
           curl -fsSL --retry 5 --retry-all-errors "$DUMP_URL" \
-            | tar -xOzf - "$INNER" \
+            | tar -xOzf - "$INNER" 2>/dev/null \
             | pg_restore --data-only -f - 2>/dev/null \
             | python -m scripts.index_build.extract_dump out/
 
