@@ -90,8 +90,9 @@ Config lives in `src/priorart/data/config.yaml`. Top-level dimension weights, th
 | `core/inspect.py` | Single-package scoring (skips retrieval) used by `priorart inspect` and `evaluate_package` |
 | `core/ingestion.py` | Git clone + two-pass file prioritization + injection scanning |
 | `core/ast_extract.py` | Python AST + regex interface extraction (also TS, JS, Rust, Go via regex) |
-| `scripts/index_build/` | Offline pipeline (deps.dev BigQuery → fastembed → usearch → sigstore → HF Hub) |
+| `scripts/index_build/` | Offline pipeline (ecosyste.ms S3 dump → slim JSONL on HF Hub → fastembed → usearch → sigstore → HF Hub) |
 | `.github/workflows/rebuild-index.yml` | Monthly GH Actions rebuild; identity-pinned sigstore signer |
+| `.github/workflows/extract-snapshot.yml` | Weekly probe + on-change streaming extract of the ecosyste.ms PostgreSQL dump into `priorart/package-snapshot` |
 | `bench/` | Retrieval benchmark harness (nDCG/Recall/MRR) + seed fixtures |
 | `data/config.yaml` | All tunable parameters with research citations |
 
@@ -143,6 +144,6 @@ Top-level dimension weights and recommendation thresholds are in `data/config.ya
 
 **`days_since_compatible_release` is populated from deps.dev** — `_fetch_fresh_signals` in `core/find_alternatives.py` resolves the publish date of `latest_version` via `_latest_stable_published_at(deps_data)` and sets the signal. Falls back to the 365-day default only when the publish date is missing.
 
-**`version_compatible` is still never populated** — `is_current_partial_score` in config remains effectively dead. Requires Python version comparison logic to implement (tracked in `agentcontext/OPEN_ISSUES.md`).
+**`version_compatible` is still never populated** — `is_current_partial_score` in config remains effectively dead. Requires Python version comparison logic to implement.
 
-**Semantic index covers Go** — the old hardcoded `pkg.go.dev` package dictionary was superseded by the HNSW shard built from deps.dev BigQuery. The registry client still exists as a fallback for `--lite` mode but is no longer the primary discovery path.
+**Semantic index covers Go** — the old hardcoded `pkg.go.dev` package dictionary was superseded by the HNSW shard built from the ecosyste.ms snapshot. The registry client still exists as a fallback for `--lite` mode but is no longer the primary discovery path.

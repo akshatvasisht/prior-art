@@ -24,9 +24,14 @@ concurrency:
 jobs:
   build-shard:
     runs-on: ubuntu-latest
-    # Upper bound covering fetch retries plus CPU embed pass; individual
-    # shards finish well under this in normal operation.
+    # Snapshot download (~few hundred MB) + CPU embed pass; individual shards
+    # finish well under this in normal operation.
     timeout-minutes: 90
+    env:
+      # Read access to the snapshot dataset; private repos would require this
+      # but priorart/package-snapshot is public, so it's only needed for
+      # higher rate limits during the initial download.
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
@@ -41,7 +46,7 @@ jobs:
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install fastembed usearch numpy httpx
+          pip install fastembed usearch numpy httpx huggingface_hub
 
       - name: Build ${{ matrix.ecosystem }} shard
         env:

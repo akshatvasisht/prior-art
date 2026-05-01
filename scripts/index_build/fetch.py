@@ -1,21 +1,26 @@
 """
 Fetch per-ecosystem package metadata for the priorart semantic index.
 
-Data source: ecosyste.ms Packages API (https://packages.ecosyste.ms). Free,
-unauthenticated, CC-BY-SA 4.0 data. Returns name + description + repository_url +
-dependent_packages_count + downloads for every package across PyPI, npm,
-crates.io, and Go modules — exactly the fields we need for a
-rank-by-entrenchment top-N slice.
+Two-source design:
 
-Each fetcher yields dicts with:
+- **Popularity lane** (top-N by ``dependent_packages_count`` or ``downloads``):
+  reads slim per-ecosystem JSONL from the ``priorart/package-snapshot`` HF Hub
+  dataset. The snapshot is produced by ``extract-snapshot.yml`` from
+  ecosyste.ms's quarterly PostgreSQL dump, which avoids the deep counter-column
+  ORDER BY queries that time out on the live API.
+- **Recency lane** (top-N by ``latest_release_published_at``): hits the live
+  ecosyste.ms API. The endpoint is indexed and reliable, and it captures
+  packages too new to appear in the latest snapshot.
+
+Each fetcher yields dicts with::
 
     {"name": str, "registry": str, "description": str, "github_url": str | None}
 
-The driver (`build.py`) de-duplicates by (name, registry), assigns integer keys,
-and writes a combined ``metadata.jsonl`` sidecar.
+The driver (``build.py``) de-duplicates by ``(name, registry)``, assigns
+integer keys, and writes a combined ``metadata.jsonl`` sidecar.
 
-Set ``PRIORART_INDEX_FIXTURE`` to a directory of ``{ecosystem}.jsonl`` files to
-skip the network and use local fixtures — useful for fast CI iteration.
+Set ``PRIORART_INDEX_FIXTURE`` to a directory of ``{ecosystem}.jsonl`` files
+to skip the network and use local fixtures — useful for fast CI iteration.
 
 Attribution: package metadata courtesy of ecosyste.ms, CC-BY-SA 4.0.
 """
@@ -34,34 +39,47 @@ import httpx
 logger = logging.getLogger(__name__)
 
 ECOSYSTE_MS_API = "https://packages.ecosyste.ms/api/v1"
+SNAPSHOT_REPO_ID = "priorart/package-snapshot"
 
-# Per-ecosystem registry slug + ranking sort key. npm's
-# sort=dependent_packages_count is a broken endpoint on the ecosyste.ms backend
-# (returns 500); downloads is a valid popularity proxy and is what PyPI/npm
-# registry search already uses in the runtime discovery path.
+# Per-ecosystem registry slug + popularity sort key. The slug is only used for
+# the recency lane (live API); the popularity lane reads the snapshot dataset.
+# npm uses ``downloads`` because dependent-count under-ranks npm-specific
+# tooling that ships as standalone CLIs rather than libraries others depend on.
 ECOSYSTEM_CONFIG = {
-    "python": {"slug": "pypi.org", "sort": "dependent_packages_count", "registry": "pypi"},
-    "npm": {"slug": "npmjs.org", "sort": "downloads", "registry": "npm"},
-    "crates": {"slug": "crates.io", "sort": "dependent_packages_count", "registry": "cargo"},
-    "go": {"slug": "proxy.golang.org", "sort": "dependent_packages_count", "registry": "go"},
-    "maven": {"slug": "repo1.maven.org", "sort": "dependent_packages_count", "registry": "maven"},
-    "nuget": {"slug": "nuget.org", "sort": "dependent_packages_count", "registry": "nuget"},
+    "python": {
+        "slug": "pypi.org",
+        "popularity_key": "dependent_packages_count",
+        "registry": "pypi",
+    },
+    "npm": {"slug": "npmjs.org", "popularity_key": "downloads", "registry": "npm"},
+    "crates": {
+        "slug": "crates.io",
+        "popularity_key": "dependent_packages_count",
+        "registry": "cargo",
+    },
+    "go": {
+        "slug": "proxy.golang.org",
+        "popularity_key": "dependent_packages_count",
+        "registry": "go",
+    },
+    "maven": {
+        "slug": "repo1.maven.org",
+        "popularity_key": "dependent_packages_count",
+        "registry": "maven",
+    },
+    "nuget": {
+        "slug": "nuget.org",
+        "popularity_key": "dependent_packages_count",
+        "registry": "nuget",
+    },
 }
 
 PER_PAGE = 1000
 REQUEST_TIMEOUT = 60
-# ecosyste.ms maven/nuget backends return intermittent 5xx on deep pages;
-# extended backoff is required to keep primary-lane shards from truncating.
+# Recency lane is on an indexed column and rarely fails, but transient 5xx
+# during page turns still warrant a few retries.
 MAX_RETRIES = 5
 RETRY_BACKOFF_SECONDS = 10
-
-# Cold popularity-sort queries on the largest registries (npm 5.5M packages,
-# proxy.golang.org) routinely exceed ecosyste.ms's ~30s upstream proxy timeout
-# and surface as 500s. A successful query is cached and served fast on
-# subsequent requests, so a best-effort pre-flight pass populates that cache
-# before the real fetch loop runs.
-WARMUP_TIMEOUT = 120
-WARMUP_PAUSE_SECONDS = 5
 
 
 def _fixture_path(ecosystem: str) -> Path | None:
@@ -81,6 +99,53 @@ def _iter_fixture(ecosystem: str) -> Iterator[dict]:
             line = line.strip()
             if line:
                 yield json.loads(line)
+
+
+def _iter_popular_snapshot(ecosystem: str, top_n: int) -> Iterator[dict]:
+    """Yield up to ``top_n`` records from the HF Hub snapshot, ranked by entrenchment."""
+    from huggingface_hub import hf_hub_download  # type: ignore
+
+    cfg = ECOSYSTEM_CONFIG[ecosystem]
+    sort_key = cfg["popularity_key"]
+    registry = cfg["registry"]
+
+    path = hf_hub_download(
+        repo_id=SNAPSHOT_REPO_ID,
+        filename=f"{ecosystem}.jsonl",
+        repo_type="dataset",
+        token=os.environ.get("HF_TOKEN") or None,
+    )
+
+    rows: list[dict] = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+
+    rows.sort(key=lambda r: r.get(sort_key) or 0, reverse=True)
+    logger.info(
+        "snapshot %s: %d rows; yielding top %d by %s",
+        ecosystem,
+        len(rows),
+        top_n,
+        sort_key,
+    )
+
+    for row in rows[:top_n]:
+        name = (row.get("name") or "").strip()
+        if not name:
+            continue
+        # Empty descriptions are surprisingly common on Go and old PyPI rows.
+        # Since ranking already selected the package, fall back to the name
+        # rather than dropping a top-ranked entry.
+        desc = (row.get("description") or "").strip() or name
+        yield {
+            "name": name,
+            "registry": registry,
+            "description": desc,
+            "github_url": row.get("repository_url") or None,
+        }
 
 
 def _get_with_retry(client: httpx.Client, url: str, params: dict) -> list[dict] | None:
@@ -120,57 +185,19 @@ def _get_with_retry(client: httpx.Client, url: str, params: dict) -> list[dict] 
     return None
 
 
-def _warm_cache(ecosystem: str, top_n: int, recency_n: int) -> None:
-    """Pre-touch each (sort, page) URL we'll need so ecosyste.ms's page cache
-    is warm before the real fetch loop runs. Failures are logged and ignored.
+def _iter_recent_ms(ecosystem: str, top_n: int) -> Iterator[dict]:
+    """Recency lane: top-N by ``latest_release_published_at`` via the live API.
+
+    Captures rising-star packages (uv, ruff, bun during their first months)
+    that haven't yet propagated into the quarterly snapshot. The endpoint
+    sorts on an indexed column, so it reliably stays under the upstream
+    proxy's timeout even on the largest registries.
     """
-    if os.environ.get("PRIORART_SKIP_WARMUP"):
-        return
-
     cfg = ECOSYSTEM_CONFIG[ecosystem]
     slug = cfg["slug"]
-    url = f"{ECOSYSTE_MS_API}/registries/{slug}/packages"
-
-    pages: list[tuple[str, int]] = []
-    pop_pages = max(1, (top_n + PER_PAGE - 1) // PER_PAGE)
-    for p in range(1, pop_pages + 1):
-        pages.append((cfg["sort"], p))
-    if recency_n > 0:
-        rec_pages = max(1, (recency_n + PER_PAGE - 1) // PER_PAGE)
-        for p in range(1, rec_pages + 1):
-            pages.append(("latest_release_published_at", p))
-
-    logger.info("ecosyste.ms %s: warming cache for %d pages", ecosystem, len(pages))
-    with httpx.Client(timeout=WARMUP_TIMEOUT) as client:
-        for sort, page in pages:
-            params = {"sort": sort, "order": "desc", "per_page": PER_PAGE, "page": page}
-            try:
-                resp = client.get(url, params=params)
-                logger.info(
-                    "warm-up %s sort=%s page=%d -> %d (%.1fs)",
-                    ecosystem,
-                    sort,
-                    page,
-                    resp.status_code,
-                    resp.elapsed.total_seconds(),
-                )
-            except httpx.RequestError as e:
-                logger.info("warm-up %s sort=%s page=%d -> error: %s", ecosystem, sort, page, e)
-
-    if WARMUP_PAUSE_SECONDS > 0:
-        time.sleep(WARMUP_PAUSE_SECONDS)
-
-
-def _iter_ecosystems_ms(ecosystem: str, top_n: int, sort_key: str | None = None) -> Iterator[dict]:
-    """Page through ecosyste.ms and yield up-to-``top_n`` package records."""
-    cfg = ECOSYSTEM_CONFIG[ecosystem]
-    slug = cfg["slug"]
-    sort = sort_key or cfg["sort"]
     registry = cfg["registry"]
     url = f"{ECOSYSTE_MS_API}/registries/{slug}/packages"
 
-    # Fixed per_page across all pages: ecosyste.ms is offset-based, so shrinking
-    # per_page between pages would shift the window and skip rows.
     per_page = min(PER_PAGE, top_n)
     yielded = 0
     page = 1
@@ -179,11 +206,16 @@ def _iter_ecosystems_ms(ecosystem: str, top_n: int, sort_key: str | None = None)
             rows = _get_with_retry(
                 client,
                 url,
-                {"sort": sort, "order": "desc", "per_page": per_page, "page": page},
+                {
+                    "sort": "latest_release_published_at",
+                    "order": "desc",
+                    "per_page": per_page,
+                    "page": page,
+                },
             )
             if not rows:
                 logger.warning(
-                    "ecosyste.ms %s: empty/failed page %d, stopping at %d records",
+                    "ecosyste.ms %s recency: empty/failed page %d, stopping at %d records",
                     ecosystem,
                     page,
                     yielded,
@@ -193,13 +225,7 @@ def _iter_ecosystems_ms(ecosystem: str, top_n: int, sort_key: str | None = None)
                 name = (row.get("name") or "").strip()
                 if not name:
                     continue
-                desc = (row.get("description") or "").strip()
-                if not desc:
-                    # Go and some older PyPI entries frequently have empty
-                    # descriptions on ecosyste.ms. Since ranking already selected
-                    # them for popularity, keep the entry with name-as-description
-                    # rather than dropping a top-ranked package.
-                    desc = name
+                desc = (row.get("description") or "").strip() or name
                 yield {
                     "name": name,
                     "registry": registry,
@@ -214,42 +240,14 @@ def _iter_ecosystems_ms(ecosystem: str, top_n: int, sort_key: str | None = None)
             page += 1
 
 
-def _iter_deps_dev(ecosystem: str, top_n: int) -> Iterator[dict]:
-    """Primary ranking slice: top-N by dependent-package count (or downloads for npm)."""
-    cfg = ECOSYSTEM_CONFIG[ecosystem]
-    logger.info(
-        "ecosyste.ms %s: fetching top %d by %s",
-        ecosystem,
-        top_n,
-        cfg["sort"],
-    )
-    yield from _iter_ecosystems_ms(ecosystem, top_n)
-
-
-def _iter_deps_dev_by_recency(ecosystem: str, top_n: int, window_days: int = 90) -> Iterator[dict]:
-    """Recency slice: top-N by most recent release.
-
-    Captures rising-star packages (uv, ruff, bun during their first months)
-    that haven't accumulated reverse deps yet but are actively shipping. The
-    ``window_days`` argument is preserved for API compatibility but unused —
-    ecosyste.ms sort returns globally-latest releases, which naturally floats
-    recent packages to the top.
-    """
-    logger.info(
-        "ecosyste.ms %s: fetching top %d by latest_release_published_at",
-        ecosystem,
-        top_n,
-    )
-    yield from _iter_ecosystems_ms(ecosystem, top_n, sort_key="latest_release_published_at")
-
-
 def fetch_ecosystem(ecosystem: str, top_n: int = 20_000, recency_n: int = 2_000) -> Iterator[dict]:
     """Yield package records for ``ecosystem``.
 
-    Prefers a local fixture if ``PRIORART_INDEX_FIXTURE`` is set; otherwise hits
-    the ecosyste.ms API. ``top_n`` caps the popularity-ranked primary slice;
-    ``recency_n`` caps the recency-ranked secondary slice (disabled when 0).
-    Records are deduped by (name, registry) — the primary slice wins on ties.
+    Prefers a local fixture if ``PRIORART_INDEX_FIXTURE`` is set; otherwise
+    reads the popularity slice from the HF Hub snapshot and the recency slice
+    from the live API. ``top_n`` caps the popularity slice, ``recency_n`` caps
+    the recency slice (disabled when 0). Records are deduped by
+    ``(name, registry)`` — popularity wins on ties.
     """
     fixture = list(_iter_fixture(ecosystem))
     if fixture:
@@ -257,10 +255,8 @@ def fetch_ecosystem(ecosystem: str, top_n: int = 20_000, recency_n: int = 2_000)
         yield from fixture
         return
 
-    _warm_cache(ecosystem, top_n, recency_n)
-
     seen: set[tuple[str, str]] = set()
-    for rec in _iter_deps_dev(ecosystem, top_n):
+    for rec in _iter_popular_snapshot(ecosystem, top_n):
         key = (rec["name"], rec["registry"])
         if key in seen:
             continue
@@ -272,7 +268,7 @@ def fetch_ecosystem(ecosystem: str, top_n: int = 20_000, recency_n: int = 2_000)
 
     logger.info(f"Adding recency lane for {ecosystem} (top {recency_n} by recent release)")
     added = 0
-    for rec in _iter_deps_dev_by_recency(ecosystem, recency_n):
+    for rec in _iter_recent_ms(ecosystem, recency_n):
         key = (rec["name"], rec["registry"])
         if key in seen:
             continue

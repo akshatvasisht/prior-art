@@ -1,0 +1,204 @@
+name: Extract package snapshot
+
+# Streams the ecosyste.ms PostgreSQL custom-format dump from S3, filters to
+# the 6 ecosystems we index, and publishes per-ecosystem slim JSONL to
+# the priorart/package-snapshot HF Hub dataset. The rebuild-index workflow
+# reads this snapshot for its popularity lane (live API only handles recency).
+#
+# Probes the dump's Last-Modified weekly. Most runs exit in ~10s without
+# extracting; only when ecosyste.ms publishes a new dump (~quarterly) does
+# the streaming extraction run end-to-end.
+
+on:
+  schedule:
+    # Weekly Monday 05:00 UTC — tight enough to catch new dumps within a
+    # week of publication, sparse enough that the cheap probe path
+    # dominates the workflow's footprint.
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Run extraction even if dump unchanged
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # Two extractions in parallel would race the HF Hub upload; queue.
+  group: extract-snapshot
+  cancel-in-progress: false
+
+env:
+  DUMP_URL: https://ecosystems-data.s3.amazonaws.com/packages-2026-02-05.tar.gz
+  HF_REPO_ID: priorart/package-snapshot
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_extract: ${{ steps.check.outputs.should_extract }}
+      last_modified: ${{ steps.check.outputs.last_modified }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install huggingface_hub
+        run: pip install --quiet huggingface_hub
+
+      - name: Compare S3 Last-Modified to HF marker
+        id: check
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          python - <<'PY'
+          import os, sys, urllib.request
+
+          req = urllib.request.Request(os.environ["DUMP_URL"], method="HEAD")
+          with urllib.request.urlopen(req, timeout=30) as resp:
+              upstream = resp.headers.get("Last-Modified", "").strip()
+          if not upstream:
+              print("::error::S3 HEAD returned no Last-Modified header", file=sys.stderr)
+              sys.exit(1)
+
+          marker = ""
+          try:
+              from huggingface_hub import hf_hub_download
+              path = hf_hub_download(
+                  repo_id=os.environ["HF_REPO_ID"],
+                  filename="source_dump_modified.txt",
+                  repo_type="dataset",
+                  token=os.environ.get("HF_TOKEN") or None,
+              )
+              with open(path) as f:
+                  marker = f.read().strip()
+          except Exception as e:
+              print(f"::notice::no marker on HF Hub yet ({e}); bootstrapping")
+
+          force = os.environ.get("FORCE", "").lower() == "true"
+          changed = force or marker != upstream
+          print(f"upstream Last-Modified: {upstream}")
+          print(f"marker on HF Hub:       {marker or '(none)'}")
+          print(f"force:                  {force}")
+          print(f"should_extract:         {changed}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"should_extract={'true' if changed else 'false'}\n")
+              f.write(f"last_modified={upstream}\n")
+          PY
+
+  extract:
+    needs: probe
+    if: needs.probe.outputs.should_extract == 'true'
+    runs-on: ubuntu-latest
+    # Stream-extract budget: 10 min download + ~60 min pg_restore decompress
+    # of the full dump + Python parse + ~3 min HF upload. Headroom for slow
+    # S3 fetches.
+    timeout-minutes: 180
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pipeline dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client
+          pip install --quiet huggingface_hub
+
+      - name: Determine inner SQL filename
+        id: inner
+        run: |
+          # The tar archive nests the dump under a dated directory; extract
+          # the first .sql entry's path so the streaming step doesn't
+          # hard-code the date.
+          inner=$(curl -sL --range 0-2097151 "$DUMP_URL" \
+            | tar -tzf - 2>/dev/null \
+            | grep -E '\.sql$' \
+            | head -n 1)
+          if [ -z "$inner" ]; then
+            echo "::error::could not locate .sql entry in tarball"
+            exit 1
+          fi
+          echo "path=$inner" >> "$GITHUB_OUTPUT"
+          echo "inner SQL path: $inner"
+
+      - name: Stream-extract slim per-ecosystem JSONL
+        env:
+          INNER: ${{ steps.inner.outputs.path }}
+        run: |
+          mkdir -p out
+          set -o pipefail
+          curl -fsSL --retry 5 --retry-all-errors "$DUMP_URL" \
+            | tar -xOzf - "$INNER" \
+            | pg_restore --data-only -f - 2>/dev/null \
+            | python -m scripts.index_build.extract_dump out/
+
+      - name: Smoke-check output
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import sys
+          out = Path("out")
+          required = ["python", "npm", "crates", "go", "maven", "nuget"]
+          failed = []
+          for eco in required:
+              p = out / f"{eco}.jsonl"
+              size = p.stat().st_size if p.exists() else 0
+              # 100 KB floor: any healthy ecosystem will easily clear this;
+              # below this is almost certainly a parse regression.
+              if size < 100_000:
+                  failed.append(f"{eco}: {size} bytes")
+          if failed:
+              print("::error::ecosystems below floor: " + ", ".join(failed), file=sys.stderr)
+              sys.exit(1)
+          print("smoke check ok")
+          PY
+
+      - name: Write markers
+        env:
+          LAST_MODIFIED: ${{ needs.probe.outputs.last_modified }}
+        run: |
+          printf "%s\n" "$LAST_MODIFIED" > out/source_dump_modified.txt
+          python - <<'PY'
+          import json, os, pathlib
+          from datetime import datetime, timezone
+          out = pathlib.Path("out")
+          (out / "extracted_at.txt").write_text(
+              json.dumps({
+                  "extracted_at": datetime.now(timezone.utc).isoformat(),
+                  "dump_url": os.environ["DUMP_URL"],
+                  "github_run_id": os.environ.get("GITHUB_RUN_ID", ""),
+                  "github_sha": os.environ.get("GITHUB_SHA", "")[:7],
+              }, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload to HF Hub
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          api.create_repo(
+              os.environ["HF_REPO_ID"],
+              repo_type="dataset",
+              exist_ok=True,
+              private=False,
+          )
+          api.upload_folder(
+              folder_path="out",
+              repo_id=os.environ["HF_REPO_ID"],
+              repo_type="dataset",
+              commit_message=f"Snapshot {os.environ.get('GITHUB_SHA', '')[:7]}",
+          )
+          PY
