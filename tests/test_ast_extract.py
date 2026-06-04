@@ -392,3 +392,77 @@ def test_fallback_extract_50_line_limit(extractor):
     result = extractor._fallback_extract(code, "python")
     result_lines = [line for line in result.split("\n") if line.strip()]
     assert len(result_lines) == 50
+
+
+def test_extract_typescript_ignores_commented_function(extractor):
+    """// line-commented declarations must not appear in extracted output."""
+    code = """
+// export function ghostFn(arg: string): void {}
+export function realFn(arg: string): void {}
+"""
+    result = extractor.extract_typescript(code)
+    assert "realFn" in result
+    assert "ghostFn" not in result
+
+
+def test_extract_typescript_ignores_block_commented_function(extractor):
+    """/* ... */ block-commented declarations must not be extracted."""
+    code = """
+/* export function ghostFn(arg: string): void {} */
+export function realFn(arg: string): void {}
+"""
+    result = extractor.extract_typescript(code)
+    assert "realFn" in result
+    assert "ghostFn" not in result
+
+
+def test_extract_javascript_ignores_template_literal_code(extractor):
+    """backtick template literals must not leak fake declarations."""
+    code = """
+const docs = `
+export function ghostFn() {}
+module.exports = { ghostHelper: function() {} };
+`;
+export function realFn(x, y) { return x + y; }
+"""
+    result = extractor.extract_javascript(code)
+    assert "realFn" in result
+    assert "ghostFn" not in result
+    assert "ghostHelper" not in result
+
+
+def test_extract_rust_ignores_string_literal_code(extractor):
+    """declarations inside "..." string literals must not be extracted."""
+    code = """
+const DOC: &str = "pub fn ghost_fn() -> u32 { 0 }";
+pub fn real_fn() -> u32 { 0 }
+"""
+    result = extractor.extract_rust(code)
+    assert "real_fn" in result
+    assert "ghost_fn" not in result
+
+
+def test_extract_go_ignores_line_comment(extractor):
+    """// line-commented Go declarations must not be extracted."""
+    code = """
+// func GhostFn() error { return nil }
+func RealFn() error { return nil }
+"""
+    result = extractor.extract_go(code)
+    assert "RealFn" in result
+    assert "GhostFn" not in result
+
+
+def test_extract_typescript_real_code_still_extracted(extractor):
+    """Regression guard: live (non-commented, non-string) code still extracted after strip."""
+    code = """
+export function liveFn(x: number): number {
+    return x + 1;
+}
+export interface LiveIface {
+    method(arg: string): void;
+}
+"""
+    result = extractor.extract_typescript(code)
+    assert "liveFn" in result
+    assert "LiveIface" in result
