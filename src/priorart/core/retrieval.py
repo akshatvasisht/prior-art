@@ -7,7 +7,11 @@ Given a natural-language task and a language hint, this module:
 2. L2-normalizes and int8-quantizes the vector to match the shard's storage dtype.
 3. Runs a usearch HNSW cosine query against the per-ecosystem shard.
 4. Joins hits against the shard's ``metadata.jsonl`` sidecar.
-5. Falls back to a live registry search when the top match is below a
+5. Fuses dense hits with a BM25 ranking via RRF — the dense retriever's
+   literal-matching bias means name-token matches like ``httplib2`` outrank
+   semantically dominant packages like ``requests``; BM25 over the same
+   metadata acts as a sparse safety net.
+6. Falls back to a live registry search when the top dense match is below a
    similarity floor (index is stale or query is too novel).
 
 The shard + manifest are fetched on first use via ``index_download``.
@@ -22,6 +26,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from .hybrid import BM25Index, reciprocal_rank_fusion
 from .index_download import ShardPaths, ensure_shard
 from .registry import PackageCandidate, get_registry_client
 
@@ -33,6 +38,18 @@ EMBED_DIM = 384
 # fall back to live registry search. Chosen conservatively — bge-small
 # self-similarity on semantically close pairs typically sits >0.65.
 SIMILARITY_FLOOR = 0.5
+
+# how many candidates to ask each retriever (dense, BM25) for before RRF
+# fusion. Larger pools deepen the fused tail without changing the head much
+# unless one retriever has a sharply different ranking — 50 is a reasonable
+# balance for an ecosystem of ~20K packages.
+HYBRID_POOL = 50
+
+# relative weights of dense vs. BM25 in RRF fusion. Dense weight is
+# higher because semantic relevance is generally stronger; BM25 is the
+# safety net for queries where dense fails on lexical bias.
+DENSE_WEIGHT = 0.7
+BM25_WEIGHT = 0.3
 
 _LANGUAGE_TO_ECOSYSTEM = {
     "python": "python",
@@ -115,6 +132,12 @@ class Retriever:
         self._shard: ShardPaths | None = None
         self._index = None
         self._metadata: dict[int, dict[str, Any]] | None = None
+        # BM25 index built lazily over the same metadata sidecar so the
+        # tokenization cost is paid once and amortized across queries.
+        self._bm25: BM25Index | None = None
+        # Name → metadata record, for hydrating BM25 hits (which return only
+        # names) into RetrievalHit objects without re-scanning the sidecar.
+        self._name_to_record: dict[str, dict[str, Any]] | None = None
 
     def _ensure_loaded(self) -> None:
         if self._index is not None:
@@ -126,10 +149,28 @@ class Retriever:
         index.load(str(shard.usearch_path))
         self._shard = shard
         self._index = index
-        self._metadata = _load_metadata(shard.metadata_path)
+        metadata = _load_metadata(shard.metadata_path)
+        self._metadata = metadata
+        # Index by name for O(1) hydration of BM25 results. If two records
+        # share a name (rare; cross-registry collision in Go), the later
+        # wins — fine because we filter by registry downstream anyway.
+        self._name_to_record = {rec["name"]: rec for rec in metadata.values() if "name" in rec}
 
-    def search(self, query: str, k: int = 20) -> list[RetrievalHit]:
-        """Return up to ``k`` hits ranked by cosine similarity."""
+    def _ensure_bm25(self) -> BM25Index:
+        """Build the BM25 index lazily on first use, then memoize on self."""
+        self._ensure_loaded()
+        if self._bm25 is None:
+            assert self._metadata is not None
+            names: list[str] = []
+            descs: list[str] = []
+            for rec in self._metadata.values():
+                names.append(rec.get("name", ""))
+                descs.append(rec.get("description", "") or "")
+            self._bm25 = BM25Index(names, descs)
+        return self._bm25
+
+    def search_dense(self, query: str, k: int = 20) -> list[RetrievalHit]:
+        """Return up to ``k`` dense hits ranked by cosine similarity."""
         self._ensure_loaded()
         assert self._index is not None and self._metadata is not None
 
@@ -155,6 +196,32 @@ class Retriever:
             )
         return hits
 
+    # Back-compat alias for callers and tests that pre-date the dense/BM25 split.
+    def search(self, query: str, k: int = 20) -> list[RetrievalHit]:
+        return self.search_dense(query, k=k)
+
+    def search_bm25(self, query: str, k: int = 50) -> list[str]:
+        """Return up to ``k`` package names by BM25 score, descending."""
+        bm25 = self._ensure_bm25()
+        return bm25.search(query, k=k)
+
+    def hydrate(self, name: str) -> RetrievalHit | None:
+        """Look up a name in the metadata sidecar; return None if missing."""
+        self._ensure_loaded()
+        assert self._name_to_record is not None
+        rec = self._name_to_record.get(name)
+        if not rec:
+            return None
+        return RetrievalHit(
+            name=rec["name"],
+            registry=rec["registry"],
+            description=rec.get("description", "") or "",
+            github_url=rec.get("github_url"),
+            # Similarity is unknown for BM25-only hits surfaced via fusion;
+            # 0.0 is a placeholder that callers should not rely on.
+            similarity=0.0,
+        )
+
 
 @lru_cache(maxsize=8)
 def _retriever_for(ecosystem: str) -> Retriever:
@@ -162,8 +229,13 @@ def _retriever_for(ecosystem: str) -> Retriever:
 
 
 def _hit_to_candidate(hit: RetrievalHit) -> PackageCandidate:
+    # Go's registry stores full module paths ("github.com/gin-gonic/gin")
+    # while every other ecosystem uses bare slugs ("requests", "axios").
+    # Normalize at the candidate boundary so CLI/MCP/bench callers see a
+    # consistent shape; the underlying metadata record is untouched.
+    name = hit.name.split("/")[-1] if hit.registry == "go" else hit.name
     return PackageCandidate(
-        name=hit.name,
+        name=name,
         registry=hit.registry,
         description=hit.description,
         github_url=hit.github_url,
@@ -178,10 +250,15 @@ def retrieve_candidates(
 ) -> list[PackageCandidate]:
     """Return ranked candidates for ``task_description`` in ``language``.
 
-    Falls back to live registry search when the index's top similarity is
-    below ``SIMILARITY_FLOOR`` or the index is unavailable. When ``lite``
-    is True, skip the semantic index entirely (no shard download, no
-    embedding model load) and use the registry search path directly.
+    Pipeline:
+    1. Run dense retrieval (top ``HYBRID_POOL``).
+    2. If dense top similarity < ``SIMILARITY_FLOOR``, the index can't answer
+       confidently — fall back to live registry search.
+    3. Otherwise, run BM25 over the same metadata sidecar (top ``HYBRID_POOL``)
+       and fuse via RRF, weighting dense > BM25.
+
+    When ``lite=True``, skip the semantic index entirely and use the registry
+    search path directly (no shard download, no embedding model load).
     """
     # Validate language even in lite mode so errors stay consistent.
     _ecosystem_for(language)
@@ -191,19 +268,72 @@ def retrieve_candidates(
 
     try:
         retriever = _retriever_for(_ecosystem_for(language))
-        hits = retriever.search(task_description, k=max_results)
+        # max_results is the *output* size; we retrieve a deeper pool from
+        # each retriever so RRF has enough material to re-rank meaningfully.
+        pool = max(HYBRID_POOL, max_results)
+        dense_hits = retriever.search_dense(task_description, k=pool)
     except Exception as e:
         logger.warning(f"Semantic index unavailable ({e}); falling back to registry search")
         return _registry_fallback(task_description, language, max_results)
 
-    if not hits or hits[0].similarity < SIMILARITY_FLOOR:
+    if not dense_hits or dense_hits[0].similarity < SIMILARITY_FLOOR:
         logger.info(
             "Top semantic match below floor "
-            f"({hits[0].similarity if hits else 'n/a'}); falling back to registry search"
+            f"({dense_hits[0].similarity if dense_hits else 'n/a'}); "
+            "falling back to registry search"
         )
         return _registry_fallback(task_description, language, max_results)
 
-    return [_hit_to_candidate(h) for h in hits]
+    # BM25 over the same corpus. Failures here are non-fatal: degrade to
+    # dense-only rather than break the whole retrieval path.
+    try:
+        bm25_names = retriever.search_bm25(task_description, k=pool)
+    except Exception as e:
+        logger.warning(f"BM25 search failed ({e}); using dense-only ranking")
+        bm25_names = []
+
+    return _fuse_and_hydrate(retriever, dense_hits, bm25_names, max_results)
+
+
+def _fuse_and_hydrate(
+    retriever: Retriever,
+    dense_hits: list[RetrievalHit],
+    bm25_names: list[str],
+    max_results: int,
+) -> list[PackageCandidate]:
+    """Combine dense + BM25 rankings via RRF, then hydrate to candidates.
+
+    Hits keyed by name throughout — RRF fuses on name identity, then we
+    reuse dense's pre-built RetrievalHit when available (carries similarity)
+    or hydrate from the metadata sidecar otherwise.
+    """
+    dense_by_name = {h.name: h for h in dense_hits}
+    dense_ranking = [h.name for h in dense_hits]
+
+    # Dense-only fast path: skip RRF when BM25 returned nothing useful.
+    if not bm25_names:
+        return [_hit_to_candidate(h) for h in dense_hits[:max_results]]
+
+    fused = reciprocal_rank_fusion(
+        [dense_ranking, bm25_names],
+        weights=[DENSE_WEIGHT, BM25_WEIGHT],
+    )
+
+    # RRF deduplicates by construction (it's a dict-keyed sum), so iterating
+    # ``fused`` yields each name exactly once. We just need to break early
+    # once max_results is reached and skip names that hydration can't resolve.
+    out: list[PackageCandidate] = []
+    for name in fused:
+        hit = dense_by_name.get(name) or retriever.hydrate(name)
+        if hit is None:
+            # BM25 returned a name that isn't in the metadata sidecar — should
+            # be impossible since BM25 is built from the same map, but guard
+            # rather than crash.
+            continue
+        out.append(_hit_to_candidate(hit))
+        if len(out) >= max_results:
+            break
+    return out
 
 
 def _registry_fallback(
