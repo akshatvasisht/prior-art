@@ -55,6 +55,31 @@ EMBED_BATCH_SIZE = 128
 # and the kernel killed mid-embed for the larger ecosystems.
 EMBED_PARALLEL = 2
 
+# Per-ecosystem cap on the top-N most-popular packages indexed in each shard.
+# Calibrated against the reverse-dependency distribution per ecosystem (see
+# agentcontext/A14A_REVDEP_ANALYSIS.md, 2026-05-02). The flat 20K under-covered
+# npm (51.8% of relevant packages missing per the npm coverage analysis) and over-
+# covered crates/python (rank 20K had only 2 dependents — noise floor).
+#
+# Maven and NuGet use 20_000 as a fallback because their distributions weren't
+# analyzed; revisit when the threshold validation runs against those ecosystems.
+DEFAULT_TOP_N = {
+    "npm": 50_000,
+    "crates": 12_000,
+    "python": 15_000,
+    "go": 20_000,
+    "maven": 20_000,
+    "nuget": 20_000,
+}
+FALLBACK_TOP_N = 20_000
+
+
+def _resolve_top_n(ecosystem: str, override: int | None) -> int:
+    """Return the cap for ``ecosystem`` — explicit ``--top-n`` wins, else per-eco default."""
+    if override is not None:
+        return override
+    return DEFAULT_TOP_N.get(ecosystem, FALLBACK_TOP_N)
+
 
 def _sha256(path: Path) -> str:
     h = hashlib.sha256()
@@ -82,12 +107,16 @@ def _shard_paths(out_dir: Path, ecosystem: str) -> tuple[Path, Path]:
     )
 
 
-def build_shard(ecosystem: str, out_dir: Path, top_n: int) -> dict:
-    """Build one shard's files. Returns the manifest entry for it."""
+def build_shard(ecosystem: str, out_dir: Path, top_n: int | None = None) -> dict:
+    """Build one shard's files. Returns the manifest entry for it.
+
+    ``top_n=None`` resolves to the per-ecosystem default in ``DEFAULT_TOP_N``.
+    """
     from fastembed import TextEmbedding  # type: ignore
     from usearch.index import Index  # type: ignore
 
-    logger.info(f"Building shard for {ecosystem}")
+    top_n = _resolve_top_n(ecosystem, top_n)
+    logger.info(f"Building shard for {ecosystem} (top_n={top_n})")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     usearch_path, metadata_path = _shard_paths(out_dir, ecosystem)
@@ -178,8 +207,12 @@ def _write_manifest(manifest: dict, out_dir: Path) -> Path:
     return manifest_path
 
 
-def build_all(out_dir: Path, ecosystems: list[str], top_n: int) -> Path:
-    """Build all shards + write manifest.json (single-node flow)."""
+def build_all(out_dir: Path, ecosystems: list[str], top_n: int | None = None) -> Path:
+    """Build all shards + write manifest.json (single-node flow).
+
+    ``top_n=None`` resolves per-ecosystem via ``DEFAULT_TOP_N``; an explicit
+    integer overrides for *all* ecosystems.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest = _manifest_skeleton()
     for ecosystem in ecosystems:
@@ -296,7 +329,12 @@ def main() -> None:
         default="python,npm,crates,go",
         help="comma-separated ecosystems (single-node or --assemble mode)",
     )
-    parser.add_argument("--top-n", type=int, default=20_000)
+    parser.add_argument(
+        "--top-n",
+        type=int,
+        default=None,
+        help="override per-ecosystem cap (default: per-ecosystem from DEFAULT_TOP_N)",
+    )
     parser.add_argument(
         "--assemble",
         action="store_true",
