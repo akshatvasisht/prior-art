@@ -47,7 +47,7 @@ def find_alternatives(
         return core_find_alternatives(language, task_description, explain, lite=lite)
     except Exception as e:
         logger.error(f"Error in find_alternatives: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
+        raise
 
 
 @mcp.tool()
@@ -73,7 +73,7 @@ def ingest_repo(
         return core_ingest_repo(repo_url, language, category)
     except Exception as e:
         logger.error(f"Error in ingest_repo: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
+        raise
 
 
 @mcp.tool()
@@ -99,7 +99,7 @@ def evaluate_package(
         return core_inspect_package(package_name, language, explain)
     except Exception as e:
         logger.error(f"Error in evaluate_package: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
+        raise
 
 
 def main() -> None:  # pragma: no cover
