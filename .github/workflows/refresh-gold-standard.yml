@@ -1,9 +1,14 @@
+# 2026-05-02 — schedule disabled per A19a (OPEN_ISSUES.md). The cron was
+# decoupled from evaluation: gold_standard.jsonl was being regenerated
+# monthly but bench/run.py was never run against it, so quality issues
+# (awesome-* meta-list leaks, Go path-tail mismatches) sat undetected.
+# Re-enable only after wiring bench results into the PR description with
+# gating on no-regression (depends on A19c reproducibility metadata and
+# A19e per-language stratification, both shipped 2026-05-02). Manual
+# trigger via workflow_dispatch remains available.
 name: Refresh benchmark gold standard
 
 on:
-  schedule:
-    # First of every month at 07:00 UTC (one hour after the index rebuild).
-    - cron: "0 7 1 * *"
   workflow_dispatch:
 
 permissions:

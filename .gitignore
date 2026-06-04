@@ -85,3 +85,12 @@ dmypy.json
 agentcontext/
 .gitnexus
 .claude/
+
+# Benchmark app-filter cache — repopulated on demand from PyPI/crates.io
+bench/fixtures/.app_filter_cache.json
+
+# Regenerable awesome-list snapshots (rebuild with build_gold_standard.py --refresh)
+bench/fixtures/awesome-snapshots/
+
+# Internal release-planning notes (local only)
+OBV_NEXT_STEPS.md
