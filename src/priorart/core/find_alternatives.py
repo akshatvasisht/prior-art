@@ -29,6 +29,16 @@ from .utils import load_config, parse_github_url
 logger = logging.getLogger(__name__)
 
 
+# Signal-fetch group names. Used in per-group `logger.warning` messages emitted
+# when individual signal fetches fail; exposed here so tests can pin the group
+# contract without hard-coding log wording. See _fetch_fresh_signals.
+SIGNAL_GROUP_STARS_FORKS = "stars-and-forks"
+SIGNAL_GROUP_MTTR = "MTTR"
+SIGNAL_GROUP_COMMIT_REGULARITY = "commit-regularity"
+SIGNAL_GROUP_VERSION_GRAPH = "version-graph"
+SIGNAL_GROUP_DEP_HEALTH = "dep-health"
+
+
 def find_alternatives(
     language: str, task_description: str, explain: bool = False, lite: bool = False
 ) -> dict[str, Any]:
@@ -225,8 +235,9 @@ def _collect_package_signals(
         try:
             with DepsDevClient() as deps_client:
                 github_url = deps_client.get_identity_fallback(candidate.name, candidate.registry)
-        except Exception:
-            pass
+        except Exception as e:
+            # Best-effort fallback; surface at debug so operators can trace the failure.
+            logger.debug("DepsDevClient identity lookup failed for %s: %s", candidate.name, e)
 
     if not github_url:
         logger.warning(f"No GitHub URL found for {candidate.name}")
@@ -319,82 +330,113 @@ def _fetch_fresh_signals(
     Returns:
         Dictionary of collected signals
     """
-    signals = {}
+    signals: dict[str, Any] = {}
 
-    # Get GitHub signals
+    # Get GitHub signals — split into per-group try blocks so a failure in one
+    # signal-group (MTTR, commit-regularity) does not lose the others, and the
+    # log message identifies which group broke for operator triage.
     github_token = os.getenv("GITHUB_TOKEN")
     if github_token:
+        github_client: GitHubClient | None = None
+        repository = None
+        repo_slug = github_url
+
         try:
             github_client = GitHubClient(
                 token=github_token, stagger_ms=config["github"]["stagger_interval_ms"]
             )
-
             parsed = github_client.parse_github_url(github_url)
             if parsed:
                 owner, repo = parsed
-                gh_signals = github_client.get_repository_signals(
-                    owner,
-                    repo,
-                    issues_lookback_months=config["github"]["issues_lookback_months"],
-                    commits_lookback_weeks=config["github"]["commits_lookback_weeks"],
-                    issues_max_pages=config["github"]["issues_max_pages"],
+                repo_slug = f"{owner}/{repo}"
+                repository = github_client.github.get_repo(repo_slug)
+        except Exception as e:
+            logger.warning(
+                f"GitHub {SIGNAL_GROUP_STARS_FORKS} fetch failed for %s: %s", repo_slug, e
+            )
+
+        if github_client is not None and repository is not None:
+            try:
+                star_count = repository.stargazers_count or 0
+                fork_count = repository.forks_count or 0
+                signals["star_count"] = star_count
+                signals["fork_count"] = fork_count
+                signals["fork_to_star_ratio"] = (
+                    fork_count / star_count if (fork_count and star_count) else 0
+                )
+                signals["open_issue_count"] = repository.open_issues_count
+                if repository.updated_at:
+                    signals["days_since_last_commit"] = (
+                        datetime.now(timezone.utc) - repository.updated_at
+                    ).days
+            except Exception as e:
+                logger.warning(
+                    f"GitHub {SIGNAL_GROUP_STARS_FORKS} fetch failed for %s: %s", repo_slug, e
                 )
 
-                if gh_signals:
-                    signals.update(
-                        {
-                            "star_count": gh_signals.star_count,
-                            "fork_count": gh_signals.fork_count,
-                            "fork_to_star_ratio": (gh_signals.fork_count / gh_signals.star_count)
-                            if (gh_signals.fork_count and gh_signals.star_count)
-                            else 0,
-                            "days_since_last_commit": gh_signals.days_since_last_commit,
-                            "open_issue_count": gh_signals.open_issues_count,
-                            "closed_issues_last_year": gh_signals.closed_issues_last_year,
-                            "mttr_median_days": gh_signals.mttr_median_days,
-                            "mttr_mad": gh_signals.mttr_mad,
-                            "mttr_state": gh_signals.mttr_state,
-                            "weekly_commit_cv": gh_signals.weekly_commit_cv,
-                            "recent_committer_count": gh_signals.recent_committer_count,
-                        }
-                    )
+            try:
+                mttr_median, mttr_mad, mttr_state, closed_count = github_client._calculate_mttr(
+                    repository,
+                    config["github"]["issues_lookback_months"],
+                    config["github"]["issues_max_pages"],
+                )
+                signals["mttr_median_days"] = mttr_median
+                signals["mttr_mad"] = mttr_mad
+                signals["mttr_state"] = mttr_state
+                signals["closed_issues_last_year"] = closed_count
+            except Exception as e:
+                logger.warning(f"GitHub {SIGNAL_GROUP_MTTR} fetch failed for %s: %s", repo_slug, e)
 
-        except Exception as e:
-            logger.warning(f"GitHub API error: {e}")
+            try:
+                weekly_cv, committer_count = github_client._calculate_commit_regularity(
+                    repository, config["github"]["commits_lookback_weeks"]
+                )
+                signals["weekly_commit_cv"] = weekly_cv
+                signals["recent_committer_count"] = committer_count
+            except Exception as e:
+                logger.warning(
+                    f"GitHub {SIGNAL_GROUP_COMMIT_REGULARITY} fetch failed for %s: %s", repo_slug, e
+                )
 
-    # Get deps.dev data
+    # Get deps.dev data — split into per-group try blocks so a failure parsing
+    # one section (e.g. dep-health) does not drop the others (e.g. version-graph),
+    # and the log identifies which group broke for operator triage.
+    deps_data: DepsDevData | None = None
     try:
         with DepsDevClient() as deps_client:
             deps_data = deps_client.get_package_data(candidate.name, candidate.registry)
+    except Exception as e:
+        logger.warning(
+            f"deps.dev {SIGNAL_GROUP_VERSION_GRAPH} fetch failed for %s: %s", candidate.name, e
+        )
 
-        if deps_data:
-            signals.update(
-                {
-                    "first_release_date": deps_data.first_release_date,
-                    "latest_version": deps_data.latest_version,
-                    "release_cv": deps_data.release_cv,
-                    "major_versions_per_year": deps_data.major_versions_per_year,
-                    "reverse_dep_count": deps_data.reverse_dep_count,
-                }
-            )
+    if deps_data:
+        try:
+            signals["first_release_date"] = deps_data.first_release_date
+            signals["latest_version"] = deps_data.latest_version
+            signals["release_cv"] = deps_data.release_cv
+            signals["major_versions_per_year"] = deps_data.major_versions_per_year
+            signals["reverse_dep_count"] = deps_data.reverse_dep_count
 
             latest_published = _latest_stable_published_at(deps_data)
             if latest_published is not None:
                 signals["days_since_compatible_release"] = (
                     datetime.now(timezone.utc) - latest_published
                 ).days
+        except Exception as e:
+            logger.warning(
+                f"deps.dev {SIGNAL_GROUP_VERSION_GRAPH} fetch failed for %s: %s", candidate.name, e
+            )
 
-            if deps_data.dependency_info:
-                signals.update(
-                    {
-                        "direct_dep_count": deps_data.dependency_info.direct_count,
-                        "vulnerable_dep_count": deps_data.dependency_info.vulnerable_count,
-                        "deprecated_dep_count": deps_data.dependency_info.deprecated_count,
-                    }
+        if deps_data.dependency_info:
+            try:
+                signals["direct_dep_count"] = deps_data.dependency_info.direct_count
+                signals["vulnerable_dep_count"] = deps_data.dependency_info.vulnerable_count
+                signals["deprecated_dep_count"] = deps_data.dependency_info.deprecated_count
+            except Exception as e:
+                logger.warning(
+                    f"deps.dev {SIGNAL_GROUP_DEP_HEALTH} fetch failed for %s: %s", candidate.name, e
                 )
-
-    except Exception as e:
-        logger.warning(f"deps.dev error: {e}")
 
     # Add download data from candidate
     if candidate.weekly_downloads:

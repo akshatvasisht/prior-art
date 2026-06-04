@@ -372,6 +372,10 @@ class PackageScorer:
         days_since_release = data.get("days_since_compatible_release")
         if days_since_release is None:
             days_since_release = 365
+        # Clamp to 0: registry-reported publish timestamps occasionally land in
+        # the future relative to local clock, which would invert the formula
+        # (a "release tomorrow" would outrank one released today).
+        days_since_release = max(0, days_since_release)
         halflife = self.versioning_config["recency_halflife_days"]
         recency_score = 1.0 / (1.0 + days_since_release / halflife)
 
@@ -487,7 +491,11 @@ class PackageScorer:
         # Clamp to 0 to handle future-dated releases (clock skew, bad registry
         # data). A negative age would invert the confidence multiplier blend in
         # calculate_score and over-weight the neutral prior.
-        age_days = max(0, (datetime.now(timezone.utc) - first_release).days)
+        raw_age_days = (datetime.now(timezone.utc) - first_release).days
+        if raw_age_days < 0:
+            package_name = data.get("package_name") or data.get("name") or "<unknown>"
+            logger.warning("Future-dated first_release for %s, clamping age to 0", package_name)
+        age_days = max(0, raw_age_days)
         return age_days / 365.0
 
     def _get_recommendation(self, health_score: int) -> str:
