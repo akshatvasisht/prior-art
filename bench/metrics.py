@@ -5,37 +5,44 @@ We compute the same three metrics BEIR reports — nDCG@k, Recall@k, MRR — but
 keep the implementation inline so the benchmark can run without pulling the
 full BEIR dependency tree. Swap in ``beir.retrieval.evaluation.EvaluateRetrieval``
 when/if we start using BEIR's shared corpora.
+
+Relevance is graded ({1, 2}): top awesome-list entries within a category are
+treated as the maintainer's "top picks" (grade=2) and the rest as still-relevant
+(grade=1). nDCG uses the standard ``(2^rel - 1) / log2(i + 2)`` gain. Recall
+and MRR remain binary — a doc with grade>=1 is "relevant".
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+from collections.abc import Mapping
 
 
-def ndcg_at_k(relevant: Iterable[str], ranked: list[str], k: int) -> float:
-    rel_set = set(relevant)
+def ndcg_at_k(relevant: Mapping[str, int], ranked: list[str], k: int) -> float:
+    """Graded nDCG@k. ``relevant`` maps doc-name -> grade in {1, 2, ...}."""
     dcg = 0.0
     for i, name in enumerate(ranked[:k]):
-        if name in rel_set:
-            dcg += 1.0 / math.log2(i + 2)
-    # Ideal DCG assumes all relevant items ranked first (binary relevance).
-    ideal_hits = min(len(rel_set), k)
-    idcg = sum(1.0 / math.log2(i + 2) for i in range(ideal_hits))
+        grade = relevant.get(name, 0)
+        if grade > 0:
+            dcg += (2**grade - 1) / math.log2(i + 2)
+    # Ideal DCG places the highest-grade docs first — sort grades descending.
+    ideal_grades = sorted(relevant.values(), reverse=True)[:k]
+    idcg = sum((2**g - 1) / math.log2(i + 2) for i, g in enumerate(ideal_grades))
     return dcg / idcg if idcg else 0.0
 
 
-def recall_at_k(relevant: Iterable[str], ranked: list[str], k: int) -> float:
-    rel_set = set(relevant)
-    if not rel_set:
+def recall_at_k(relevant: Mapping[str, int], ranked: list[str], k: int) -> float:
+    """Binary recall@k: any doc with grade>=1 in the top-k counts as a hit."""
+    if not relevant:
         return 0.0
-    return len(rel_set.intersection(ranked[:k])) / len(rel_set)
+    hits = sum(1 for name in ranked[:k] if relevant.get(name, 0) > 0)
+    return hits / len(relevant)
 
 
-def reciprocal_rank(relevant: Iterable[str], ranked: list[str]) -> float:
-    rel_set = set(relevant)
+def reciprocal_rank(relevant: Mapping[str, int], ranked: list[str]) -> float:
+    """Binary MRR: 1/(rank of first grade>=1 hit), 0 if none."""
     for i, name in enumerate(ranked):
-        if name in rel_set:
+        if relevant.get(name, 0) > 0:
             return 1.0 / (i + 1)
     return 0.0
 
