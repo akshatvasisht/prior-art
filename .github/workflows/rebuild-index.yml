@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     # Snapshot download (~few hundred MB) + CPU embed pass; individual shards
     # finish well under this in normal operation.
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
       # Read access to the snapshot dataset; private repos would require this
       # but priorart/package-snapshot is public, so it's only needed for
@@ -50,7 +50,7 @@ jobs:
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install fastembed usearch numpy httpx huggingface_hub
+          pip install fastembed usearch numpy httpx 'huggingface_hub>=1.2.0'
 
       - name: Build ${{ matrix.ecosystem }} shard
         env:
@@ -58,6 +58,10 @@ jobs:
           # uses the per-ecosystem calibrated DEFAULT_TOP_N. A non-empty value
           # is an intentional global override across all ecosystems.
           TOP_N: ${{ github.event.inputs.top_n }}
+          # ONNX/OpenMP thread hints; ignored when the onnxruntime wheel is
+          # not built with OpenMP.
+          OMP_NUM_THREADS: "4"
+          OMP_WAIT_POLICY: PASSIVE
         run: |
           python -m scripts.index_build.build \
             --ecosystem ${{ matrix.ecosystem }} \
@@ -92,7 +96,7 @@ jobs:
       - name: Install publish dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install huggingface_hub sigstore
+          pip install 'huggingface_hub>=1.2.0' sigstore
 
       - name: Download all shard artifacts
         uses: actions/download-artifact@v4
@@ -162,3 +166,19 @@ jobs:
         with:
           name: index-build-output
           path: dist/index
+
+  notify-failure:
+    needs: [build-shard, assemble-and-publish]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open an issue when the rebuild fails
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "Index rebuild failed ($(date -u +%Y-%m-%d))" \
+            --body "The scheduled index rebuild did not publish. Run: $RUN_URL"

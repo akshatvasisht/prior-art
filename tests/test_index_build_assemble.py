@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -138,11 +139,13 @@ def test_fetch_prior_shard_copies_files_and_returns_entry(tmp_path: Path, monkey
     out = tmp_path / "index"
     out.mkdir()
 
+    usearch_bytes = b"prior-usearch"
+    metadata_bytes = b"prior-metadata"
     prior_entry = {
         "usearch": "npm.usearch",
         "metadata": "npm.metadata.jsonl",
-        "usearch_sha256": "abc",
-        "metadata_sha256": "def",
+        "usearch_sha256": hashlib.sha256(usearch_bytes).hexdigest(),
+        "metadata_sha256": hashlib.sha256(metadata_bytes).hexdigest(),
         "record_count": 999,
     }
     prior_manifest = {
@@ -156,9 +159,9 @@ def test_fetch_prior_shard_copies_files_and_returns_entry(tmp_path: Path, monkey
     manifest_blob = cache_root / "manifest.json"
     manifest_blob.write_text(json.dumps(prior_manifest))
     usearch_blob = cache_root / "npm.usearch"
-    usearch_blob.write_bytes(b"prior-usearch")
+    usearch_blob.write_bytes(usearch_bytes)
     metadata_blob = cache_root / "npm.metadata.jsonl"
-    metadata_blob.write_bytes(b"prior-metadata")
+    metadata_blob.write_bytes(metadata_bytes)
 
     def _fake_download(*, repo_id, filename, repo_type, cache_dir, token):
         return str(cache_root / filename)
@@ -173,6 +176,35 @@ def test_fetch_prior_shard_copies_files_and_returns_entry(tmp_path: Path, monkey
     assert result["stale_from_version"] == "2026-04"
     assert (out / "npm.usearch").read_bytes() == b"prior-usearch"
     assert (out / "npm.metadata.jsonl").read_bytes() == b"prior-metadata"
+
+
+def test_fetch_prior_shard_rejects_sha256_mismatch(tmp_path: Path, monkeypatch):
+    """A downloaded shard whose bytes don't match the manifest sha256 is not
+    reused — guards against a tampered binary being deserialized."""
+    from scripts.index_build import build as build_mod
+
+    prior_entry = {
+        "usearch": "npm.usearch",
+        "metadata": "npm.metadata.jsonl",
+        "usearch_sha256": "0" * 64,  # deliberately wrong
+        "metadata_sha256": "0" * 64,
+        "record_count": 999,
+    }
+    cache_root = tmp_path / "hf-cache"
+    cache_root.mkdir()
+    (cache_root / "manifest.json").write_text(
+        json.dumps({"version": "2026-04", "shards": {"npm": prior_entry}})
+    )
+    (cache_root / "npm.usearch").write_bytes(b"tampered")
+    (cache_root / "npm.metadata.jsonl").write_bytes(b"tampered")
+
+    def _fake_download(*, repo_id, filename, repo_type, cache_dir, token):
+        return str(cache_root / filename)
+
+    fake_hf = type("FakeHF", (), {"hf_hub_download": staticmethod(_fake_download)})
+    monkeypatch.setitem(__import__("sys").modules, "huggingface_hub", fake_hf)
+
+    assert build_mod._fetch_prior_shard(tmp_path / "index", "npm") is None
 
 
 def test_fetch_prior_shard_swallows_network_error(tmp_path: Path, monkeypatch):

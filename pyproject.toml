@@ -35,7 +35,7 @@ dependencies = [
     "packaging>=23.0",
     "gitpython>=3.1.30",        # CVE-2022-24439 (command injection via crafted URL) fixed in 3.1.30
     # v0.2 semantic index — HF download + sigstore verify + ONNX embedding + HNSW search
-    "huggingface_hub>=0.20",
+    "huggingface_hub>=1.2.0",
     "sigstore>=3.0",
     "fastembed>=0.3",
     "usearch>=2.12",
