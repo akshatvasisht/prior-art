@@ -1,0 +1,8 @@
+{"query": "http client", "language": "python", "relevant_grades": {"requests": 2, "httpx": 2, "urllib3": 2, "aiohttp": 2}}
+{"query": "json parser", "language": "python", "relevant_grades": {"orjson": 2, "ujson": 2, "simplejson": 2, "rapidjson": 2}}
+{"query": "jwt parser", "language": "python", "relevant_grades": {"pyjwt": 2, "python-jose": 2, "authlib": 2}}
+{"query": "http client", "language": "javascript", "relevant_grades": {"axios": 2, "node-fetch": 2, "got": 2, "ky": 2}}
+{"query": "date manipulation", "language": "javascript", "relevant_grades": {"date-fns": 2, "dayjs": 2, "luxon": 2, "moment": 2}}
+{"query": "http client", "language": "rust", "relevant_grades": {"reqwest": 2, "hyper": 2, "ureq": 2, "surf": 2}}
+{"query": "cli parser", "language": "rust", "relevant_grades": {"clap": 2, "structopt": 2, "argh": 2}}
+{"query": "http router", "language": "go", "relevant_grades": {"gin": 2, "chi": 2, "gorilla/mux": 2, "echo": 2}}

@@ -38,15 +38,8 @@ def test_classify_commodity_detects_http():
 # --- _estimate_weeks ---
 
 
-def test_estimate_weeks_with_api_signals():
-    """When api_loc / public_symbols are present, use the ingest-signal formula."""
-    weeks = _estimate_weeks({"api_loc": 2000, "public_symbols": 100, "direct_dep_count": 3})
-    # 0.5 * 2 + 0.3 * 3 + 0.2 * 2 = 1.0 + 0.9 + 0.4 = 2.3
-    assert weeks == 2.3
-
-
-def test_estimate_weeks_fallback_without_api_signals():
-    """Without ingest signals, falls back to desc-length + deps."""
+def test_estimate_weeks_uses_desc_length_and_deps():
+    """Uses description length + dep count as the proxy."""
     weeks = _estimate_weeks({"description": "x" * 500, "direct_dep_count": 5})
     # 0.5 + 0.2 * 5 + 0.4 * 1.0 = 1.9
     assert weeks == 1.9

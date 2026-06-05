@@ -78,23 +78,14 @@ def _classify_commodity(description: str | None, package_name: str | None) -> st
 def _estimate_weeks(data: dict[str, Any]) -> float:
     """Rough engineer-weeks to reimplement the package's public API.
 
-    Uses ingest signals if present (public API LoC + symbol count), falls back
-    to dependency count + description length as a coarse proxy.
+    Uses dependency count + description length as a coarse proxy.
 
     Formula keeps the estimate bounded between 0.5 and 52 weeks to avoid
     nonsense outputs for packages with little signal.
     """
-    api_loc = data.get("api_loc") or 0
-    symbols = data.get("public_symbols") or 0
     deps = data.get("direct_dep_count") or 0
-
-    if api_loc or symbols:
-        weeks = 0.5 * (api_loc / 1000.0) + 0.3 * deps + 0.2 * (symbols / 50.0)
-    else:
-        # Fallback: description length + deps as a proxy
-        desc_len = len(data.get("description") or "")
-        weeks = 0.5 + 0.2 * deps + 0.4 * (desc_len / 500.0)
-
+    desc_len = len(data.get("description") or "")
+    weeks = 0.5 + 0.2 * deps + 0.4 * (desc_len / 500.0)
     return max(0.5, min(52.0, round(weeks, 1)))
 
 

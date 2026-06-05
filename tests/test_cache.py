@@ -266,6 +266,28 @@ def test_close_drains_pool(temp_cache_dir):
     assert cache._pool.empty()
 
 
+def test_is_signal_group_stale_corrupt_datetime_treated_as_stale():
+    """is_signal_group_stale treats corrupt ISO strings as stale (safe default)."""
+    snapshot = SignalSnapshot(
+        package_name="test",
+        registry="pypi",
+    )
+
+    # Simulate a row whose stored timestamp got corrupted on disk.
+    snapshot.downloads_refreshed_at = "not-a-datetime"
+    assert snapshot.is_signal_group_stale("downloads", 7)
+
+
+def test_update_signal_group_missing_package_raises_keyerror(temp_cache_dir):
+    """update_signal_group raises KeyError when no row matches the (name, registry) pair."""
+    import pytest
+
+    cache = SQLiteCache(temp_cache_dir)
+
+    with pytest.raises(KeyError, match="ghost-pkg/pypi"):
+        cache.update_signal_group("ghost-pkg", "pypi", "downloads", {"weekly_downloads": 1})
+
+
 def test_additive_migration_adds_missing_columns(temp_cache_dir):
     """Opening a DB missing scorecard_* columns adds them via ALTER TABLE."""
     import sqlite3

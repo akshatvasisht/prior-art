@@ -96,28 +96,35 @@ class RepositoryIngester:
         self.timeout_seconds = timeout_seconds
         self.extractor = InterfaceExtractor()
 
+        # Anchor injection patterns to line-start (start-of-string OR after newline).
+        # Word boundaries (\b) don't help here: in "This system: design" the space->
+        # "system" transition is itself a word boundary, so \bSYSTEM: would still
+        # match. Real prompt-injection markers like "SYSTEM:" / "IGNORE PREVIOUS"
+        # appear at the start of a line in templated injections; benign prose only
+        # contains them mid-sentence. Compile once, store as compiled patterns.
         if injection_patterns is not None:
-            self._injection_patterns = [re.escape(p) for p in injection_patterns]
+            raw_patterns = list(injection_patterns)
         else:
             try:
                 config_text = files("priorart.data").joinpath("config.yaml").read_text()
                 config = yaml.safe_load(config_text)
-                raw = config.get("security", {}).get("prompt_injection_patterns", [])
-                self._injection_patterns = [re.escape(p) for p in raw]
+                raw_patterns = config.get("security", {}).get("prompt_injection_patterns", [])
             except Exception:
                 # Fallback if config.yaml is unavailable — config.yaml is canonical
-                self._injection_patterns = [
-                    re.escape(p)
-                    for p in [
-                        "IGNORE PREVIOUS",
-                        "SYSTEM:",
-                        r"\[INST\]",
-                        "<<<OVERRIDE",
-                        "###INSTRUCTION",
-                        "DISREGARD ALL",
-                        "NEW INSTRUCTIONS",
-                    ]
+                raw_patterns = [
+                    "IGNORE PREVIOUS",
+                    "SYSTEM:",
+                    "[INST]",
+                    "<<<OVERRIDE",
+                    "###INSTRUCTION",
+                    "DISREGARD ALL",
+                    "NEW INSTRUCTIONS",
                 ]
+
+        self._injection_patterns: list[re.Pattern[str]] = [
+            re.compile(rf"(?:^|\n){re.escape(p)}", re.IGNORECASE | re.MULTILINE)
+            for p in raw_patterns
+        ]
 
     def ingest(self, github_url: str, priority_files: list[str] | None = None) -> IngestionResult:
         """Ingest a GitHub repository.
@@ -164,8 +171,14 @@ class RepositoryIngester:
             return result
 
     def _validate_url(self, url: str) -> bool:
-        """Validate GitHub URL."""
-        pattern = r"^https://github\.com/[^/]+/[^/]+/?$"
+        """Validate GitHub URL.
+
+        Restricts owner/repo segments to characters GitHub actually permits
+        (alphanumerics, dot, underscore, hyphen). The previous ``[^/]+`` class
+        accepted query strings and fragments, which slipped past validation
+        and surfaced later as confusing 404s from ``git clone``.
+        """
+        pattern = r"^https://github\.com/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+/?$"
         return bool(re.match(pattern, url))
 
     def _clone_repo(self, url: str, temp_dir: str) -> Path:  # pragma: no cover
@@ -402,13 +415,25 @@ class RepositoryIngester:
         )
 
     def _scan_for_injection(self, result: IngestionResult) -> None:
-        """Scan README files for prompt injection patterns."""
+        """Scan README files for prompt injection patterns.
+
+        Patterns are pre-compiled with a line-start anchor (see ``__init__``)
+        so benign mid-sentence occurrences (e.g. "This system: design") do
+        not trigger false redactions. The leading newline captured by the
+        anchor is preserved in the replacement so line breaks are not lost.
+        """
         for pattern in self._injection_patterns:
-            matches = re.findall(pattern, result.content, re.IGNORECASE)
+            matches = pattern.findall(result.content)
             if matches:
                 result.content_warnings.append(
-                    f"Potential prompt injection pattern detected: {pattern}"
+                    f"Potential prompt injection pattern detected: {pattern.pattern}"
                 )
 
-                # Redact the pattern
-                result.content = re.sub(pattern, "[REDACTED]", result.content, flags=re.IGNORECASE)
+                # Redact the pattern, keeping the leading whitespace prefix the
+                # anchor matched (preserves line structure of the surrounding text).
+                def _replace(match: re.Match[str]) -> str:
+                    text = match.group(0)
+                    prefix = "\n" if text.startswith("\n") else ""
+                    return f"{prefix}[REDACTED]"
+
+                result.content = pattern.sub(_replace, result.content)

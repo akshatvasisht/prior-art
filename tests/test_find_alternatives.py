@@ -7,12 +7,16 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from priorart.core.find_alternatives import (
+    SIGNAL_GROUP_COMMIT_REGULARITY,
+    SIGNAL_GROUP_DEP_HEALTH,
+    SIGNAL_GROUP_MTTR,
+    SIGNAL_GROUP_STARS_FORKS,
+    SIGNAL_GROUP_VERSION_GRAPH,
     _collect_package_signals,
     _fetch_fresh_signals,
     _save_to_cache,
     find_alternatives,
 )
-from priorart.core.github_client import GitHubSignals
 from priorart.core.registry import PackageCandidate
 from priorart.core.utils import load_config
 
@@ -313,24 +317,19 @@ def test_collect_signals_identity_fails(mock_save, mock_fetch, mock_candidate, m
 
 def test_fetch_fresh_signals_with_github(mock_candidate, mock_config):
     """With GITHUB_TOKEN set, fetches both GitHub and deps.dev signals."""
-    gh_signals = GitHubSignals(
-        star_count=50000,
-        fork_count=9000,
-        open_issues_count=250,
-        mttr_median_days=3.5,
-        mttr_mad=1.2,
-        mttr_state="measured",
-        weekly_commit_cv=0.25,
-        recent_committer_count=15,
-        days_since_last_commit=5,
-        closed_issues_last_year=800,
-    )
+    repo_mock = MagicMock()
+    repo_mock.stargazers_count = 50000
+    repo_mock.forks_count = 9000
+    repo_mock.open_issues_count = 250
+    repo_mock.updated_at = datetime.now(timezone.utc) - timedelta(days=5)
 
     with patch.dict(os.environ, {"GITHUB_TOKEN": "test_token"}):
         with patch("priorart.core.find_alternatives.GitHubClient") as mock_gh_cls:
             gh_instance = MagicMock()
             gh_instance.parse_github_url.return_value = ("psf", "requests")
-            gh_instance.get_repository_signals.return_value = gh_signals
+            gh_instance.github.get_repo.return_value = repo_mock
+            gh_instance._calculate_mttr.return_value = (3.5, 1.2, "measured", 800)
+            gh_instance._calculate_commit_regularity.return_value = (0.25, 15)
             mock_gh_cls.return_value = gh_instance
 
             with patch("priorart.core.find_alternatives.DepsDevClient") as mock_deps_cls:
@@ -799,3 +798,168 @@ def test_evaluate_candidate_success_path(mock_candidate, mock_config, sample_pac
 
     assert result is not None
     assert result.name == "requests"
+
+
+# --- per-group signal-fetch error logs ---
+
+
+def test_signal_errors_logged_per_group(mock_candidate, mock_config, caplog):
+    """Each signal-group failure logs a warning that names the group, so a partial
+    upstream regression can be diagnosed from logs alone. Stars/forks succeed,
+    MTTR + commit-regularity fail on the GitHub side; deps.dev version-graph and
+    dep-health each fail independently. Successful groups still populate signals."""
+    import logging
+
+    repo_mock = MagicMock()
+    repo_mock.stargazers_count = 100
+    repo_mock.forks_count = 10
+    repo_mock.open_issues_count = 5
+    repo_mock.updated_at = datetime.now(timezone.utc) - timedelta(days=2)
+
+    deps_data = MagicMock()
+    deps_data.first_release_date = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    deps_data.latest_version = "1.0.0"
+    deps_data.release_cv = 0.3
+    deps_data.major_versions_per_year = 0.5
+    deps_data.reverse_dep_count = 100
+    deps_data.dependency_info = MagicMock()
+    type(deps_data.dependency_info).direct_count = property(
+        lambda _self: (_ for _ in ()).throw(RuntimeError("dep-health parse blew up"))
+    )
+
+    with caplog.at_level(logging.WARNING, logger="priorart.core.find_alternatives"):
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "test_token"}):
+            with patch("priorart.core.find_alternatives.GitHubClient") as mock_gh_cls:
+                gh_instance = MagicMock()
+                gh_instance.parse_github_url.return_value = ("psf", "requests")
+                gh_instance.github.get_repo.return_value = repo_mock
+                gh_instance._calculate_mttr.side_effect = RuntimeError("MTTR API blew up")
+                gh_instance._calculate_commit_regularity.side_effect = RuntimeError(
+                    "commits API blew up"
+                )
+                mock_gh_cls.return_value = gh_instance
+
+                with patch("priorart.core.find_alternatives.DepsDevClient") as mock_deps_cls:
+                    deps_instance = MagicMock()
+                    deps_instance.get_package_data.return_value = deps_data
+                    ctx = MagicMock()
+                    ctx.__enter__ = MagicMock(return_value=deps_instance)
+                    ctx.__exit__ = MagicMock(return_value=False)
+                    mock_deps_cls.return_value = ctx
+
+                    signals = _fetch_fresh_signals(
+                        mock_candidate, "https://github.com/psf/requests", mock_config
+                    )
+
+    # Stars/forks group still populated even though MTTR + regularity broke.
+    assert signals["star_count"] == 100
+    assert signals["fork_count"] == 10
+    # Version-graph still populated even though dep-health broke.
+    assert signals["latest_version"] == "1.0.0"
+    assert signals["reverse_dep_count"] == 100
+    # MTTR + regularity didn't populate.
+    assert "mttr_state" not in signals
+    assert "weekly_commit_cv" not in signals
+    # dep-health didn't populate.
+    assert "direct_dep_count" not in signals
+
+    messages = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(SIGNAL_GROUP_MTTR in m for m in messages), messages
+    assert any(SIGNAL_GROUP_COMMIT_REGULARITY in m for m in messages), messages
+    assert any(SIGNAL_GROUP_DEP_HEALTH in m for m in messages), messages
+
+
+def test_deps_dev_identity_lookup_logs_at_debug(caplog, mock_config):
+    """Identity-lookup fallback failures surface at debug, not silently."""
+    import logging
+
+    candidate = PackageCandidate(
+        name="obscure",
+        registry="pypi",
+        description="no github",
+        version="1.0.0",
+        github_url=None,
+    )
+    cache = MagicMock()
+    cache.get.return_value = None
+
+    with caplog.at_level(logging.DEBUG, logger="priorart.core.find_alternatives"):
+        with patch("priorart.core.find_alternatives.DepsDevClient") as mock_deps:
+            mock_deps.side_effect = RuntimeError("network down")
+            result = _collect_package_signals(candidate, "python", cache, mock_config, None)
+
+    assert result is None
+    debug_msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG]
+    assert any("identity lookup" in m for m in debug_msgs), debug_msgs
+
+
+def test_signal_errors_stars_forks_attribute_failure(mock_candidate, mock_config, caplog):
+    """A failure reading stars/forks attributes is caught and logged with the group name."""
+    import logging
+
+    repo_mock = MagicMock()
+    # stargazers_count raises on access — exercises the inner stars-and-forks try/except.
+    type(repo_mock).stargazers_count = property(
+        lambda _self: (_ for _ in ()).throw(RuntimeError("stars attr blew up"))
+    )
+
+    with caplog.at_level(logging.WARNING, logger="priorart.core.find_alternatives"):
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "test_token"}):
+            with patch("priorart.core.find_alternatives.GitHubClient") as mock_gh_cls:
+                gh_instance = MagicMock()
+                gh_instance.parse_github_url.return_value = ("psf", "requests")
+                gh_instance.github.get_repo.return_value = repo_mock
+                gh_instance._calculate_mttr.return_value = (1.0, 0.5, "measured", 10)
+                gh_instance._calculate_commit_regularity.return_value = (0.2, 5)
+                mock_gh_cls.return_value = gh_instance
+
+                with patch("priorart.core.find_alternatives.DepsDevClient") as mock_deps_cls:
+                    deps_instance = MagicMock()
+                    deps_instance.get_package_data.return_value = None
+                    ctx = MagicMock()
+                    ctx.__enter__ = MagicMock(return_value=deps_instance)
+                    ctx.__exit__ = MagicMock(return_value=False)
+                    mock_deps_cls.return_value = ctx
+
+                    signals = _fetch_fresh_signals(
+                        mock_candidate, "https://github.com/psf/requests", mock_config
+                    )
+
+    # MTTR + regularity should still populate even though stars/forks group broke.
+    assert signals["mttr_state"] == "measured"
+    assert signals["weekly_commit_cv"] == 0.2
+    assert "star_count" not in signals
+    messages = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(SIGNAL_GROUP_STARS_FORKS in m for m in messages), messages
+
+
+def test_signal_errors_version_graph_post_processing_failure(mock_candidate, mock_config, caplog):
+    """Failure during version-graph post-processing is caught with the group label."""
+    import logging
+
+    deps_data = MagicMock()
+    # first_release_date raises on access — exercises the post-fetch version-graph try/except.
+    type(deps_data).first_release_date = property(
+        lambda _self: (_ for _ in ()).throw(RuntimeError("version-graph attr blew up"))
+    )
+    deps_data.dependency_info = None
+
+    with caplog.at_level(logging.WARNING, logger="priorart.core.find_alternatives"):
+        with patch.dict(os.environ, {}, clear=True):
+            os.environ.pop("GITHUB_TOKEN", None)
+
+            with patch("priorart.core.find_alternatives.DepsDevClient") as mock_deps_cls:
+                deps_instance = MagicMock()
+                deps_instance.get_package_data.return_value = deps_data
+                ctx = MagicMock()
+                ctx.__enter__ = MagicMock(return_value=deps_instance)
+                ctx.__exit__ = MagicMock(return_value=False)
+                mock_deps_cls.return_value = ctx
+
+                signals = _fetch_fresh_signals(
+                    mock_candidate, "https://github.com/psf/requests", mock_config
+                )
+
+    assert "first_release_date" not in signals
+    messages = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(SIGNAL_GROUP_VERSION_GRAPH in m for m in messages), messages

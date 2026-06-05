@@ -100,7 +100,14 @@ class InterfaceExtractor:
             return self._fallback_extract(content, "python")
 
     def _extract_class(self, node: ast.ClassDef) -> str:
-        """Extract class definition with methods."""
+        """Extract class definition with methods.
+
+        Note: nested ``ClassDef`` nodes inside this class body are intentionally
+        not recursed into. Public API typically lives at the module/top-class
+        level, and including nested helper classes would inflate the extracted
+        surface with implementation detail. Only direct ``FunctionDef`` and
+        ``AsyncFunctionDef`` children are walked.
+        """
         lines = []
 
         # Class signature
@@ -161,8 +168,38 @@ class InterfaceExtractor:
         lines = func_str.split("\n")
         return "\n".join("    " + line if line else "" for line in lines)
 
+    @staticmethod
+    def _strip_comments_and_strings(content: str, language: str) -> str:
+        r"""Neutralize comments and string literals before regex extraction.
+
+        The per-language regex extractors in this module are line/structure
+        oriented and have no notion of lexical context. Without this pre-pass
+        they happily match ``// export function foo() {}`` (commented-out code)
+        or template-string bodies that contain documentation examples,
+        inflating the extracted public surface with dead code.
+
+        The pass preserves byte/line offsets where it matters by keeping empty
+        delimiters (``""``, ``''``, ``\`\``) in place so subsequent regexes
+        still see syntactically valid source.
+        """
+        if language not in {"typescript", "javascript", "rust", "go"}:
+            return content
+
+        # Order matters: kill block comments first so a ``//`` inside ``/* */``
+        # isn't preserved when the block strip runs. Then gut strings (template
+        # > double > single) so a ``//`` inside a string literal — e.g. a
+        # ``"https://..."`` URL — is neutralized to ``""`` before the line-comment
+        # strip can treat it as a comment and swallow the rest of the line.
+        content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+        content = re.sub(r"`(?:[^`\\]|\\.)*`", "``", content, flags=re.DOTALL)
+        content = re.sub(r'"(?:[^"\\]|\\.)*"', '""', content)
+        content = re.sub(r"'(?:[^'\\]|\\.)*'", "''", content)
+        content = re.sub(r"//[^\n]*", "", content)
+        return content
+
     def extract_typescript(self, content: str) -> str:
         """Extract TypeScript public interface using regex."""
+        content = self._strip_comments_and_strings(content, "typescript")
         patterns = [
             # Export functions
             r"export\s+(?:async\s+)?function\s+\w+\s*\([^)]*\)[^{]*",
@@ -187,6 +224,7 @@ class InterfaceExtractor:
 
     def extract_javascript(self, content: str) -> str:
         """Extract JavaScript public interface using regex."""
+        content = self._strip_comments_and_strings(content, "javascript")
         patterns = [
             # Export functions (ES6)
             r"export\s+(?:async\s+)?function\s+\w+\s*\([^)]*\)[^{]*",
@@ -211,6 +249,7 @@ class InterfaceExtractor:
 
     def extract_rust(self, content: str) -> str:
         """Extract Rust public interface using regex."""
+        content = self._strip_comments_and_strings(content, "rust")
         patterns = [
             # Public functions
             r"pub\s+(?:async\s+)?fn\s+\w+[^{]*\{",
@@ -242,6 +281,7 @@ class InterfaceExtractor:
 
     def extract_go(self, content: str) -> str:
         """Extract Go public interface using regex."""
+        content = self._strip_comments_and_strings(content, "go")
         patterns = [
             # Public functions (capitalized)
             r"^func\s+[A-Z]\w*\s*\([^)]*\)[^{]*",

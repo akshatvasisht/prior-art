@@ -359,6 +359,68 @@ def test_age_unparseable_string(sample_config, sample_package_data):
     assert scored.age_years == 0.0
 
 
+def test_score_versioning_clamps_negative_days_since_release(sample_config, sample_package_data):
+    """Negative days_since_compatible_release is clamped to 0 to prevent score inversion."""
+    scorer = PackageScorer(sample_config)
+
+    neg_data = sample_package_data.copy()
+    neg_data["days_since_compatible_release"] = -10
+    neg_score, neg_details = scorer._score_versioning(neg_data)
+
+    zero_data = sample_package_data.copy()
+    zero_data["days_since_compatible_release"] = 0
+    zero_score, _ = scorer._score_versioning(zero_data)
+
+    # Without the clamp, the unclamped recency formula at -10 (with halflife 180)
+    # would yield 1 / (1 + -10/180) = 1.0588, an out-of-range value that would
+    # drive the dimension above the maximum achievable for any real release.
+    unclamped_recency = 1.0 / (1.0 + -10 / sample_config["versioning"]["recency_halflife_days"])
+    assert unclamped_recency > 1.0  # confirms the inversion exists pre-clamp
+
+    # Clamp: -10 must be treated identically to 0
+    assert neg_score == zero_score
+    # Inversion guard: clamped score must never exceed the max-recency score (zero days)
+    assert neg_score <= zero_score
+    assert neg_details["days_since_release"] == 0
+
+
+def test_calculate_age_years_logs_warning_on_future_date(
+    sample_config, sample_package_data, caplog
+):
+    """Future-dated first_release_date emits a warning and clamps age to 0."""
+    from datetime import datetime, timedelta, timezone
+
+    scorer = PackageScorer(sample_config)
+
+    data = sample_package_data.copy()
+    data["first_release_date"] = datetime.now(timezone.utc) + timedelta(days=30)
+
+    with caplog.at_level("WARNING", logger="priorart.core.scoring"):
+        age = scorer._calculate_age_years(data)
+
+    assert age == 0.0
+    assert any("Future-dated first_release" in rec.message for rec in caplog.records)
+    assert any("requests" in rec.message for rec in caplog.records)
+
+
+def test_calculate_age_years_no_warning_when_age_legitimately_zero(
+    sample_config, sample_package_data, caplog
+):
+    """An age of exactly 0 (release earlier today) must not trigger the future-date warning."""
+    from datetime import datetime, timezone
+
+    scorer = PackageScorer(sample_config)
+
+    data = sample_package_data.copy()
+    data["first_release_date"] = datetime.now(timezone.utc)
+
+    with caplog.at_level("WARNING", logger="priorart.core.scoring"):
+        age = scorer._calculate_age_years(data)
+
+    assert age == 0.0
+    assert not any("Future-dated first_release" in rec.message for rec in caplog.records)
+
+
 def test_reliability_blends_scorecard_bucket(sample_config, sample_package_data):
     """Scorecard reliability bucket blends at 30% weight into reliability score."""
     scorer = PackageScorer(sample_config)

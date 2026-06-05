@@ -97,7 +97,12 @@ class SignalSnapshot:
             return True  # Never refreshed
 
         if isinstance(refreshed_at, str):
-            refreshed_at = datetime.fromisoformat(refreshed_at)
+            try:
+                refreshed_at = datetime.fromisoformat(refreshed_at)
+            except ValueError:
+                # Treat corrupt stored datetime as stale — safe default that
+                # forces a refresh rather than swallowing the bad row silently.
+                return True
         if refreshed_at.tzinfo is None:
             refreshed_at = refreshed_at.replace(tzinfo=timezone.utc)
 
@@ -341,7 +346,7 @@ class SQLiteCache:
         values = list(signals.values())
 
         with self._conn() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 f"""
                 UPDATE package_signals
                 SET {set_clause}, updated_at = ?
@@ -349,6 +354,10 @@ class SQLiteCache:
             """,
                 values + [now, package_name, registry],
             )
+            # Surface a typo'd (package_name, registry) pair instead of letting
+            # the UPDATE no-op silently and confuse downstream callers.
+            if cursor.rowcount == 0:
+                raise KeyError(f"Package {package_name}/{registry} not found in cache")
 
 
 def copy_seed_cache(seed_path: Path) -> None:  # pragma: no cover
