@@ -68,6 +68,7 @@ def _hf_download_with_retry(*, attempts: int = 5, base_delay: float = 5.0, **kwa
             time.sleep(delay)
     raise AssertionError("unreachable")  # pragma: no cover
 
+
 ECOSYSTE_MS_API = "https://packages.ecosyste.ms/api/v1"
 SNAPSHOT_REPO_ID = "priorart/package-snapshot"
 
