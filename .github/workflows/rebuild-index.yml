@@ -8,8 +8,8 @@ on:
   workflow_dispatch:
     inputs:
       top_n:
-        description: Packages per ecosystem
-        default: "20000"
+        description: Per-ecosystem override (blank = calibrated DEFAULT_TOP_N)
+        default: ""
 
 permissions:
   id-token: write  # required for sigstore keyless signing (assemble job)
@@ -50,12 +50,15 @@ jobs:
 
       - name: Build ${{ matrix.ecosystem }} shard
         env:
-          TOP_N: ${{ github.event.inputs.top_n || '20000' }}
+          # Blank on schedule and default dispatch -> build.py omits --top-n and
+          # uses the per-ecosystem calibrated DEFAULT_TOP_N. A non-empty value
+          # is an intentional global override across all ecosystems.
+          TOP_N: ${{ github.event.inputs.top_n }}
         run: |
           python -m scripts.index_build.build \
             --ecosystem ${{ matrix.ecosystem }} \
             --out dist/index \
-            --top-n "$TOP_N"
+            ${TOP_N:+--top-n "$TOP_N"}
 
       - uses: actions/upload-artifact@v4
         with:
