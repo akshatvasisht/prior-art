@@ -18,8 +18,15 @@ import math
 from collections.abc import Mapping
 
 
+def _dedupe(ranked: list[str]) -> list[str]:
+    """Drop repeat doc IDs, keeping first occurrence. A ranked list with the
+    same doc twice would otherwise let recall/nDCG count it twice and exceed 1.0."""
+    return list(dict.fromkeys(ranked))
+
+
 def ndcg_at_k(relevant: Mapping[str, int], ranked: list[str], k: int) -> float:
     """Graded nDCG@k. ``relevant`` maps doc-name -> grade in {1, 2, ...}."""
+    ranked = _dedupe(ranked)
     dcg = 0.0
     for i, name in enumerate(ranked[:k]):
         grade = relevant.get(name, 0)
@@ -35,6 +42,7 @@ def recall_at_k(relevant: Mapping[str, int], ranked: list[str], k: int) -> float
     """Binary recall@k: any doc with grade>=1 in the top-k counts as a hit."""
     if not relevant:
         return 0.0
+    ranked = _dedupe(ranked)
     hits = sum(1 for name in ranked[:k] if relevant.get(name, 0) > 0)
     return hits / len(relevant)
 

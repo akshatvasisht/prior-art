@@ -307,6 +307,8 @@ def _fuse_and_hydrate(
     reuse dense's pre-built RetrievalHit when available (carries similarity)
     or hydrate from the metadata sidecar otherwise.
     """
+    if max_results <= 0:
+        return []
     dense_by_name = {h.name: h for h in dense_hits}
     dense_ranking = [h.name for h in dense_hits]
 

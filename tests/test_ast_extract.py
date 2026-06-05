@@ -431,6 +431,17 @@ export function realFn(x, y) { return x + y; }
     assert "ghostHelper" not in result
 
 
+def test_extract_javascript_preserves_export_after_url_string(extractor):
+    """A `//` inside a quoted URL string must not be treated as a line comment
+    and swallow a real export that shares the line."""
+    code = (
+        'export const API_URL = "https://example.com/api"; '
+        "export function realFn(x) { return x; }\n"
+    )
+    result = extractor.extract_javascript(code)
+    assert "realFn" in result
+
+
 def test_extract_rust_ignores_string_literal_code(extractor):
     """declarations inside "..." string literals must not be extracted."""
     code = """

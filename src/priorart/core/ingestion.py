@@ -114,7 +114,7 @@ class RepositoryIngester:
                 raw_patterns = [
                     "IGNORE PREVIOUS",
                     "SYSTEM:",
-                    r"\[INST\]",
+                    "[INST]",
                     "<<<OVERRIDE",
                     "###INSTRUCTION",
                     "DISREGARD ALL",

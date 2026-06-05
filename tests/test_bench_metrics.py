@@ -11,6 +11,16 @@ def test_recall_at_k():
     assert recall_at_k({}, ["a"], k=3) == 0.0
 
 
+def test_duplicate_results_do_not_inflate_metrics():
+    """Repeated doc IDs in the ranked list are counted once — metrics stay <= 1.0
+    and match the de-duplicated ranking."""
+    relevant = {"a": 1, "b": 1}
+    assert recall_at_k(relevant, ["a", "a", "b"], k=3) == 1.0
+    assert recall_at_k(relevant, ["a", "a", "b"], k=3) == recall_at_k(relevant, ["a", "b"], k=3)
+    assert ndcg_at_k(relevant, ["a", "a", "b"], k=3) == ndcg_at_k(relevant, ["a", "b"], k=3)
+    assert ndcg_at_k(relevant, ["a", "a"], k=3) <= 1.0
+
+
 def test_reciprocal_rank():
     assert reciprocal_rank({"a": 1}, ["x", "a", "y"]) == 0.5
     assert reciprocal_rank({"a": 1}, ["a", "x"]) == 1.0

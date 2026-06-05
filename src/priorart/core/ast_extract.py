@@ -186,14 +186,15 @@ class InterfaceExtractor:
             return content
 
         # Order matters: kill block comments first so a ``//`` inside ``/* */``
-        # isn't preserved when the block strip runs. Then line comments. Then
-        # strings (template > double > single) so a ``//`` inside a string
-        # literal we're about to gut isn't independently treated as a comment.
+        # isn't preserved when the block strip runs. Then gut strings (template
+        # > double > single) so a ``//`` inside a string literal — e.g. a
+        # ``"https://..."`` URL — is neutralized to ``""`` before the line-comment
+        # strip can treat it as a comment and swallow the rest of the line.
         content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-        content = re.sub(r"//[^\n]*", "", content)
         content = re.sub(r"`(?:[^`\\]|\\.)*`", "``", content, flags=re.DOTALL)
         content = re.sub(r'"(?:[^"\\]|\\.)*"', '""', content)
         content = re.sub(r"'(?:[^'\\]|\\.)*'", "''", content)
+        content = re.sub(r"//[^\n]*", "", content)
         return content
 
     def extract_typescript(self, content: str) -> str:

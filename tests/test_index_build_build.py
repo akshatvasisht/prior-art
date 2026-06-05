@@ -30,7 +30,7 @@ def test_default_top_n_covers_all_supported_ecosystems():
     ],
 )
 def test_resolve_top_n_returns_per_ecosystem_default(ecosystem, expected):
-    """Calibrated caps from agentcontext/A14A_REVDEP_ANALYSIS.md (2026-05-02)."""
+    """Calibrated per-ecosystem caps from the reverse-dependency analysis."""
     assert build._resolve_top_n(ecosystem, override=None) == expected
 
 
@@ -38,6 +38,16 @@ def test_resolve_top_n_honors_explicit_override():
     """Passing an int override wins over the per-ecosystem default."""
     assert build._resolve_top_n("npm", override=100) == 100
     assert build._resolve_top_n("crates", override=5000) == 5000
+
+
+def test_resolve_top_n_rejects_non_positive_override():
+    """A zero or negative --top-n is a user error, not a silent no-op: a
+    negative cap would slice the popularity list as rows[:-n] and quietly index
+    the wrong packages, and 0 would fetch nothing."""
+    for bad in (0, -1, -20_000):
+        for ecosystem in ("npm", "ruby"):  # known + unknown ecosystem
+            with pytest.raises(ValueError):
+                build._resolve_top_n(ecosystem, override=bad)
 
 
 def test_resolve_top_n_falls_back_for_unknown_ecosystem():

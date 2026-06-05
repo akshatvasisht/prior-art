@@ -42,23 +42,25 @@ def test_reciprocal_rank_fusion_disagreement():
 
 
 def test_reciprocal_rank_fusion_uses_k_constant():
-    """Different k values produce different orderings of close-matched docs."""
-    # With k=1, the gap between rank 1 and rank 2 is huge (1/2 vs 1/3 = 0.17);
-    # a single-list #1 outweighs a both-lists #2.
-    # With k=60, the gap is tiny (1/61 vs 1/62 = 0.0003); both-lists #2 wins.
-    a = ["solo_top", "shared"]
-    b = ["other_top", "shared"]
+    """k must actually change the fused ranking, not just be plumbed through.
+
+    ``solo`` is rank 1 in one list only (score 1/(k+1)); ``consistent`` is rank
+    4 in both lists (score 2/(k+4)). At k=1 the curve is sharp, so the single
+    top-rank wins; at k=60 it flattens, so the doc that appears in both lists
+    wins. Asserting their *relative* order makes this tie-free regardless of
+    the filler docs.
+    """
+    a = ["solo", "f1", "f2", "consistent"]
+    b = ["g1", "g2", "g3", "consistent"]
+
     small_k = reciprocal_rank_fusion([a, b], k=1)
     big_k = reciprocal_rank_fusion([a, b], k=60)
-    # Small k: solo_top (1/2) beats shared (1/2 from rank 2 in only one list,
-    # plus 1/3 from rank 2 in the other) = 0.5 + 0.333 = 0.833 → 'shared' wins.
-    # Wait, both are in #2 of both lists, so shared has 1/3+1/3 = 0.667; solo_top
-    # has 1/2 + 0 = 0.5. With k=1, shared still wins.
-    # The point: orderings can differ as k changes. Demonstrate at least
-    # that k is plumbed through.
-    assert small_k[0] == "shared"
-    assert big_k[0] == "shared"
-    # And k=60 vs default agree (default IS 60):
+
+    # Sharp curve (k=1): the solo top-rank outranks the cross-list doc.
+    assert small_k.index("solo") < small_k.index("consistent")
+    # Flat curve (k=60): consistency across lists wins instead — the order flips.
+    assert big_k.index("consistent") < big_k.index("solo")
+    # Default k is 60.
     assert big_k == reciprocal_rank_fusion([a, b])
 
 

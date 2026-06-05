@@ -11,12 +11,20 @@ from priorart.core.retrieval import (
     _ecosystem_for,
     _embed_query_int8,
     _embedder,
+    _fuse_and_hydrate,
     _hit_to_candidate,
     _load_metadata,
     _registry_fallback,
     _retriever_for,
     retrieve_candidates,
 )
+
+
+def test_fuse_and_hydrate_returns_empty_for_nonpositive_max_results():
+    """max_results <= 0 yields no candidates — the append-before-check loop
+    previously returned one item for max_results=0."""
+    assert _fuse_and_hydrate(MagicMock(), [], ["x"], 0) == []
+    assert _fuse_and_hydrate(MagicMock(), [], ["x"], -1) == []
 
 
 def test_ecosystem_for_maps_common_languages():

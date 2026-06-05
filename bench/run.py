@@ -80,11 +80,16 @@ def evaluate(gold: list[dict], k: int, baselines: list[str]) -> dict[str, dict[s
         language = item["language"]
         # graded form (`relevant_grades` -> dict). Older fixtures with a
         # bare `relevant` list still parse — every doc gets grade=1 so binary
-        # behavior is preserved.
+        # behavior is preserved. Gold keys are canonicalized with the same
+        # _canonical_name as retrieved names, so a mixed-case fixture entry
+        # ("Requests") still matches the lowercased candidate ("requests").
         if "relevant_grades" in item:
-            relevant = dict(item["relevant_grades"])
+            relevant = {
+                _canonical_name(name, language): grade
+                for name, grade in item["relevant_grades"].items()
+            }
         else:
-            relevant = {name: 1 for name in item.get("relevant", [])}
+            relevant = {_canonical_name(name, language): 1 for name in item.get("relevant", [])}
 
         for baseline in baselines:
             try:

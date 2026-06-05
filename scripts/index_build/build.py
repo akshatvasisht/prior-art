@@ -56,10 +56,10 @@ EMBED_BATCH_SIZE = 128
 EMBED_PARALLEL = 2
 
 # Per-ecosystem cap on the top-N most-popular packages indexed in each shard.
-# Calibrated against the reverse-dependency distribution per ecosystem (see
-# agentcontext/A14A_REVDEP_ANALYSIS.md, 2026-05-02). The flat 20K under-covered
-# npm (51.8% of relevant packages missing per the npm coverage analysis) and over-
-# covered crates/python (rank 20K had only 2 dependents — noise floor).
+# Calibrated against the reverse-dependency distribution per ecosystem. The flat
+# 20K under-covered npm (51.8% of relevant packages missing per the npm coverage
+# analysis) and over-covered crates/python (rank 20K had only 2 dependents —
+# noise floor).
 #
 # Maven and NuGet use 20_000 as a fallback because their distributions weren't
 # analyzed; revisit when the threshold validation runs against those ecosystems.
@@ -75,10 +75,25 @@ FALLBACK_TOP_N = 20_000
 
 
 def _resolve_top_n(ecosystem: str, override: int | None) -> int:
-    """Return the cap for ``ecosystem`` — explicit ``--top-n`` wins, else per-eco default."""
+    """Return the cap for ``ecosystem`` — explicit ``--top-n`` wins, else per-eco default.
+
+    A non-positive override is rejected rather than silently honored: a negative
+    cap would slice the popularity list as ``rows[:-n]`` and quietly index the
+    wrong packages, and 0 would fetch nothing.
+    """
     if override is not None:
+        if override <= 0:
+            raise ValueError(f"--top-n must be a positive integer, got {override}")
         return override
     return DEFAULT_TOP_N.get(ecosystem, FALLBACK_TOP_N)
+
+
+def _positive_int(value: str) -> int:
+    """argparse type for ``--top-n``: reject 0/negative at parse time."""
+    n = int(value)
+    if n <= 0:
+        raise argparse.ArgumentTypeError(f"--top-n must be a positive integer, got {n}")
+    return n
 
 
 def _sha256(path: Path) -> str:
@@ -331,7 +346,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--top-n",
-        type=int,
+        type=_positive_int,
         default=None,
         help="override per-ecosystem cap (default: per-ecosystem from DEFAULT_TOP_N)",
     )

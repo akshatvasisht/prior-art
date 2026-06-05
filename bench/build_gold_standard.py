@@ -337,7 +337,13 @@ def _grade(repos: list[str]) -> dict[str, int]:
 
 
 def build_records(*, filter_apps: bool = False) -> list[dict]:
-    records: list[dict] = []
+    # Awesome-lists repeat a category heading across sections (e.g. Rust lists
+    # "Database" more than once), which would otherwise emit two rows for the
+    # same (query, language) and double-count that query in the per-language
+    # mean. Key by (query, language) and union the relevant sets — keeping the
+    # higher grade on conflict — so each query appears exactly once.
+    by_key: dict[tuple[str, str], dict[str, int]] = {}
+    order: list[tuple[str, str]] = []
     for language, filename, _ in SOURCES:
         path = SNAPSHOT_DIR / filename
         if not path.exists():
@@ -354,14 +360,19 @@ def build_records(*, filter_apps: bool = False) -> list[dict]:
                 # Filter may drop the category below the floor; skip rather
                 # than emit a one-or-two-entry row that's noise for nDCG.
                 continue
-            records.append(
-                {
-                    "query": heading.lower(),
-                    "language": language,
-                    "relevant_grades": _grade(repos),
-                }
-            )
-    return records
+            record_key = (key, language)
+            grades = _grade(repos)
+            if record_key in by_key:
+                existing = by_key[record_key]
+                for repo, grade in grades.items():
+                    existing[repo] = max(existing.get(repo, 0), grade)
+            else:
+                by_key[record_key] = grades
+                order.append(record_key)
+    return [
+        {"query": query, "language": language, "relevant_grades": by_key[(query, language)]}
+        for query, language in order
+    ]
 
 
 def write_records(records: list[dict]) -> None:

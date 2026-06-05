@@ -71,7 +71,9 @@ def test_bench_run_preamble_includes_required_keys(tmp_path: Path, capsys):
 
 def test_bench_run_per_language_output(tmp_path: Path):
     gold = [
-        {"query": "http", "language": "python", "relevant_grades": {"requests": 2}},
+        # Mixed-case gold key: canonicalization must lower it to match the
+        # retrieved "requests", otherwise python recall would silently drop to 0.
+        {"query": "http", "language": "python", "relevant_grades": {"Requests": 2}},
         {"query": "router", "language": "go", "relevant_grades": {"gin": 2}},
     ]
     fake_baselines = {

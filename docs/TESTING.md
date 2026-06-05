@@ -73,7 +73,7 @@ that would otherwise reflect realistic retrieval quality. To generate three
 realistic developer-query rewrites per category and benchmark against them:
 
 ```bash
-pip install anthropic
+.venv/bin/python -m pip install anthropic
 export ANTHROPIC_API_KEY="..."
 .venv/bin/python bench/build_gold_standard.py --rewrite \
     --input bench/fixtures/gold_standard.jsonl \
