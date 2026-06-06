@@ -47,6 +47,52 @@ SIGNER_IDENTITY = (
 INDEX_URL_ENV = "PRIORART_INDEX_URL"
 INDEX_DIR_ENV = "PRIORART_INDEX_DIR"
 
+# The shape this client's query vectors are built for. A published index built
+# with a different model/dim/dtype can't be queried meaningfully, so loading
+# one is a hard error rather than a silent wrong-vector search. Must track the
+# query embedder in core.retrieval.
+EXPECTED_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
+EXPECTED_EMBED_DIM = 384
+EXPECTED_DTYPE = "i8"
+
+# Verified manifest is memoized per process so a multi-ecosystem first run
+# doesn't re-download + re-verify it once per ecosystem.
+_MANIFEST_CACHE: dict[str, Any] | None = None
+
+
+class IncompatibleIndexError(RuntimeError):
+    """The published index was built with a model/dim/dtype this client can't query."""
+
+
+def _reset_manifest_cache() -> None:
+    """Clear the in-process manifest memo. Tests call this to avoid leakage."""
+    global _MANIFEST_CACHE
+    _MANIFEST_CACHE = None
+
+
+def _check_index_compat(manifest: dict[str, Any]) -> None:
+    """Raise IncompatibleIndexError if the manifest's embedding contract differs.
+
+    Only fields actually present in the manifest are checked, so a legacy
+    manifest without these fields still loads.
+    """
+    expected = {
+        "embed_model": EXPECTED_EMBED_MODEL,
+        "embed_dim": EXPECTED_EMBED_DIM,
+        "dtype": EXPECTED_DTYPE,
+    }
+    mismatches = [
+        f"{key}={manifest[key]!r} (expected {exp!r})"
+        for key, exp in expected.items()
+        if key in manifest and manifest[key] != exp
+    ]
+    if mismatches:
+        raise IncompatibleIndexError(
+            "Published index is incompatible with this client: "
+            + ", ".join(mismatches)
+            + ". Upgrade priorart to a version that matches the index."
+        )
+
 
 @dataclass
 class ShardPaths:
@@ -132,8 +178,12 @@ def _download(repo_filename: str, dest_dir: Path) -> Path:
     )
 
 
-def ensure_manifest() -> dict[str, Any]:
-    """Download + verify + return the index manifest."""
+def ensure_manifest(force: bool = False) -> dict[str, Any]:
+    """Download + verify + return the index manifest, memoized per process."""
+    global _MANIFEST_CACHE
+    if _MANIFEST_CACHE is not None and not force:
+        return _MANIFEST_CACHE
+
     dest = index_dir()
     manifest_path = _download("manifest.json", dest)
     bundle_path = _download("manifest.sigstore.json", dest)
@@ -145,7 +195,10 @@ def ensure_manifest() -> dict[str, Any]:
         manifest_path.unlink(missing_ok=True)
         raise RuntimeError(f"Index manifest signature verification failed: {e}") from e
 
-    return json.loads(manifest_path.read_text())
+    manifest = json.loads(manifest_path.read_text())
+    _check_index_compat(manifest)
+    _MANIFEST_CACHE = manifest
+    return manifest
 
 
 def ensure_shard(ecosystem: str, manifest: dict[str, Any] | None = None) -> ShardPaths:

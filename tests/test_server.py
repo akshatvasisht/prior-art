@@ -61,3 +61,38 @@ def test_find_alternatives_tool_returns_success_payload():
         result = server.find_alternatives("python", "http client", False, False)
     assert result is payload
     core.assert_called_once_with("python", "http client", False, lite=False)
+
+
+# --- core error-dict is surfaced as a real error ---
+
+
+def test_raise_if_error_raises_on_error_dict():
+    with pytest.raises(RuntimeError, match="kaboom"):
+        server._raise_if_error({"status": "error", "message": "kaboom"})
+
+
+def test_raise_if_error_passes_through_non_error():
+    payload = {"status": "ok", "packages": []}
+    assert server._raise_if_error(payload) is payload
+
+
+def test_find_alternatives_tool_raises_on_core_error_dict():
+    """A core fn that *returns* an error dict must still become an MCP error."""
+    err = {"status": "error", "message": "core-boom"}
+    with patch.object(server, "core_find_alternatives", return_value=err):
+        with pytest.raises(RuntimeError, match="core-boom"):
+            server.find_alternatives("python", "http client", False, False)
+
+
+def test_ingest_repo_tool_raises_on_core_error_dict():
+    err = {"status": "error", "message": "core-ingest-boom"}
+    with patch.object(server, "core_ingest_repo", return_value=err):
+        with pytest.raises(RuntimeError, match="core-ingest-boom"):
+            server.ingest_repo("https://github.com/psf/requests", "python", None)
+
+
+def test_evaluate_package_tool_raises_on_core_error_dict():
+    err = {"status": "error", "message": "core-eval-boom"}
+    with patch.object(server, "core_inspect_package", return_value=err):
+        with pytest.raises(RuntimeError, match="core-eval-boom"):
+            server.evaluate_package("requests", "python", False)

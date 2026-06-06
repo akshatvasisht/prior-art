@@ -61,6 +61,13 @@ def sample_package_snapshot():
         license="Apache-2.0",
         created_at=datetime.now(timezone.utc) - timedelta(days=30),
         updated_at=datetime.now(timezone.utc),
+        # Fresh per-group refresh stamps so the warm-cache path doesn't re-fetch.
+        downloads_refreshed_at=datetime.now(timezone.utc),
+        repo_refreshed_at=datetime.now(timezone.utc),
+        mttr_refreshed_at=datetime.now(timezone.utc),
+        regularity_refreshed_at=datetime.now(timezone.utc),
+        version_refreshed_at=datetime.now(timezone.utc),
+        dep_health_refreshed_at=datetime.now(timezone.utc),
     )
 
 

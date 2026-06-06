@@ -33,6 +33,13 @@ def _infer_registry(language: str | None, package_name: str) -> tuple[str, str]:
             "cargo": "cargo",
             "go": "go",
             "golang": "go",
+            "java": "maven",
+            "kotlin": "maven",
+            "scala": "maven",
+            "csharp": "nuget",
+            "c#": "nuget",
+            "dotnet": "nuget",
+            "fsharp": "nuget",
         }
         registry = registry_for_lang.get(lang)
         if not registry:

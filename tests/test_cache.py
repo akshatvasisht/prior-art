@@ -323,3 +323,42 @@ def test_additive_migration_adds_missing_columns(temp_cache_dir):
     assert "scorecard_overall" in cols_after
     assert "scorecard_reliability_bucket" in cols_after
     assert "scorecard_dep_health_bucket" in cols_after
+
+
+# --- opportunistic eviction (#7) ---
+
+
+def test_maybe_evict_runs_when_gate_passes(monkeypatch, temp_cache_dir):
+    import priorart.core.cache as cache_mod
+
+    monkeypatch.setattr(cache_mod.random, "random", lambda: 0.0)  # force the sweep
+    calls = []
+    monkeypatch.setattr(
+        cache_mod.SQLiteCache, "clear_stale", lambda self, *a, **k: calls.append(1) or 3
+    )
+    cache_mod.SQLiteCache(cache_dir=temp_cache_dir)
+    assert calls == [1]  # eviction ran and reported removed rows
+
+
+def test_maybe_evict_skips_when_gate_fails(monkeypatch, temp_cache_dir):
+    import priorart.core.cache as cache_mod
+
+    monkeypatch.setattr(cache_mod.random, "random", lambda: 0.99)  # above threshold
+    calls = []
+    monkeypatch.setattr(
+        cache_mod.SQLiteCache, "clear_stale", lambda self, *a, **k: calls.append(1) or 0
+    )
+    cache_mod.SQLiteCache(cache_dir=temp_cache_dir)
+    assert calls == []
+
+
+def test_maybe_evict_swallows_errors(monkeypatch, temp_cache_dir):
+    import priorart.core.cache as cache_mod
+
+    monkeypatch.setattr(cache_mod.random, "random", lambda: 0.0)
+
+    def _boom(self, *a, **k):
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr(cache_mod.SQLiteCache, "clear_stale", _boom)
+    cache_mod.SQLiteCache(cache_dir=temp_cache_dir)  # must not raise

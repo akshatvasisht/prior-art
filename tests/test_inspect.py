@@ -33,6 +33,16 @@ def test_infer_registry_explicit_golang():
     assert _infer_registry("golang", "x") == ("golang", "go")
 
 
+def test_infer_registry_jvm_and_dotnet():
+    assert _infer_registry("java", "x") == ("java", "maven")
+    assert _infer_registry("kotlin", "x") == ("kotlin", "maven")
+    assert _infer_registry("scala", "x") == ("scala", "maven")
+    assert _infer_registry("csharp", "x") == ("csharp", "nuget")
+    assert _infer_registry("c#", "x") == ("c#", "nuget")
+    assert _infer_registry("dotnet", "x") == ("dotnet", "nuget")
+    assert _infer_registry("fsharp", "x") == ("fsharp", "nuget")
+
+
 def test_infer_registry_unsupported_language_raises():
     with pytest.raises(ValueError, match="Unsupported language"):
         _infer_registry("cobol", "x")

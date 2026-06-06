@@ -75,8 +75,7 @@ github:
   issues_max_pages: 2                   # Hard cap: 200 issues (sufficient for median/MAD)
   commits_lookback_weeks: 104           # Popoola et al. 2025: 2-year regularity window
 
-# Cache freshness windows (days) — used by is_signal_group_stale()
-# TODO: wire into _collect_package_signals for per-group staleness checks
+# Cache freshness windows (days) — enforced per source in _collect_package_signals
 cache_freshness:
   version_release: 2                    # Releases change frequently
   weekly_downloads: 7                   # Weekly data refreshes weekly
@@ -102,3 +101,4 @@ security:
 # Retrieval
 retrieval:
   max_candidates: 20                     # Max candidates returned from semantic index or registry fallback
+  similarity_floor: 0.5                  # Cosine floor; below this, fall back to live registry search

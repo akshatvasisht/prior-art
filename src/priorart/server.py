@@ -20,6 +20,18 @@ logger = logging.getLogger(__name__)
 mcp = FastMCP("priorart")
 
 
+def _raise_if_error(result: dict) -> dict:
+    """Surface a core ``{"status": "error"}`` dict as a real exception.
+
+    The core functions catch unexpected failures and return an error dict;
+    FastMCP would otherwise deliver that as a successful tool result. Raising
+    here makes the client see ``isError=true`` instead.
+    """
+    if isinstance(result, dict) and result.get("status") == "error":
+        raise RuntimeError(result.get("message", "internal error"))
+    return result
+
+
 @mcp.tool()
 def find_alternatives(
     language: str, task_description: str, explain: bool = False, lite: bool = False
@@ -44,10 +56,11 @@ def find_alternatives(
         and optional service_note about managed alternatives.
     """
     try:
-        return core_find_alternatives(language, task_description, explain, lite=lite)
+        result = core_find_alternatives(language, task_description, explain, lite=lite)
     except Exception as e:
         logger.error(f"Error in find_alternatives: {e}", exc_info=True)
         raise
+    return _raise_if_error(result)
 
 
 @mcp.tool()
@@ -70,10 +83,11 @@ def ingest_repo(
         Dict with content, files_included/skipped, warnings.
     """
     try:
-        return core_ingest_repo(repo_url, language, category)
+        result = core_ingest_repo(repo_url, language, category)
     except Exception as e:
         logger.error(f"Error in ingest_repo: {e}", exc_info=True)
         raise
+    return _raise_if_error(result)
 
 
 @mcp.tool()
@@ -96,10 +110,11 @@ def evaluate_package(
         Dict with status, single package with health_score + build-vs-borrow lens.
     """
     try:
-        return core_inspect_package(package_name, language, explain)
+        result = core_inspect_package(package_name, language, explain)
     except Exception as e:
         logger.error(f"Error in evaluate_package: {e}", exc_info=True)
         raise
+    return _raise_if_error(result)
 
 
 def main() -> None:  # pragma: no cover
