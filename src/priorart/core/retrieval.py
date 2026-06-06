@@ -29,15 +29,26 @@ from typing import Any
 from .hybrid import BM25Index, reciprocal_rank_fusion
 from .index_download import ShardPaths, ensure_shard
 from .registry import PackageCandidate, get_registry_client
+from .utils import load_config
 
 logger = logging.getLogger(__name__)
 
 EMBED_MODEL_NAME = "BAAI/bge-small-en-v1.5"
 EMBED_DIM = 384
-# Cosine similarity floor below which we don't trust the index and
-# fall back to live registry search. Chosen conservatively — bge-small
-# self-similarity on semantically close pairs typically sits >0.65.
+# Default cosine similarity floor below which we don't trust the index and fall
+# back to live registry search. Conservative — bge-small self-similarity on
+# semantically close pairs typically sits >0.65. Overridable via config.yaml
+# `retrieval.similarity_floor`; this constant is the fallback.
 SIMILARITY_FLOOR = 0.5
+
+
+def _similarity_floor() -> float:
+    """Resolve the similarity floor from config, falling back to the default."""
+    try:
+        return float(load_config()["retrieval"].get("similarity_floor", SIMILARITY_FLOOR))
+    except Exception:
+        return SIMILARITY_FLOOR
+
 
 # how many candidates to ask each retriever (dense, BM25) for before RRF
 # fusion. Larger pools deepen the fused tail without changing the head much
@@ -283,7 +294,7 @@ def retrieve_candidates(
         logger.warning(f"Semantic index unavailable ({e}); falling back to registry search")
         return _registry_fallback(task_description, language, max_results)
 
-    if not dense_hits or dense_hits[0].similarity < SIMILARITY_FLOOR:
+    if not dense_hits or dense_hits[0].similarity < _similarity_floor():
         logger.info(
             "Top semantic match below floor "
             f"({dense_hits[0].similarity if dense_hits else 'n/a'}); "

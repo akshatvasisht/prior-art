@@ -5,7 +5,9 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
+from priorart.core import retrieval
 from priorart.core.retrieval import (
+    SIMILARITY_FLOOR,
     RetrievalHit,
     Retriever,
     _ecosystem_for,
@@ -16,8 +18,26 @@ from priorart.core.retrieval import (
     _load_metadata,
     _registry_fallback,
     _retriever_for,
+    _similarity_floor,
     retrieve_candidates,
 )
+
+
+def test_similarity_floor_reads_config():
+    assert _similarity_floor() == 0.5  # from config.yaml retrieval.similarity_floor
+
+
+def test_similarity_floor_falls_back_when_key_missing(monkeypatch):
+    monkeypatch.setattr(retrieval, "load_config", lambda: {"retrieval": {}})
+    assert _similarity_floor() == SIMILARITY_FLOOR
+
+
+def test_similarity_floor_falls_back_on_config_error(monkeypatch):
+    def _boom():
+        raise RuntimeError("no config")
+
+    monkeypatch.setattr(retrieval, "load_config", _boom)
+    assert _similarity_floor() == SIMILARITY_FLOOR
 
 
 def test_fuse_and_hydrate_returns_empty_for_nonpositive_max_results():
