@@ -301,6 +301,11 @@ def test_check_index_compat_rejects_dim_mismatch():
         index_download._check_index_compat({"embed_dim": 768})
 
 
+def test_check_index_compat_rejects_dtype_mismatch():
+    with pytest.raises(IncompatibleIndexError, match="dtype"):
+        index_download._check_index_compat({"dtype": "f32"})
+
+
 def test_ensure_manifest_memoizes(monkeypatch, tmp_path):
     monkeypatch.setenv(INDEX_DIR_ENV, str(tmp_path))
     calls: list[str] = []

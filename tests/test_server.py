@@ -82,3 +82,17 @@ def test_find_alternatives_tool_raises_on_core_error_dict():
     with patch.object(server, "core_find_alternatives", return_value=err):
         with pytest.raises(RuntimeError, match="core-boom"):
             server.find_alternatives("python", "http client", False, False)
+
+
+def test_ingest_repo_tool_raises_on_core_error_dict():
+    err = {"status": "error", "message": "core-ingest-boom"}
+    with patch.object(server, "core_ingest_repo", return_value=err):
+        with pytest.raises(RuntimeError, match="core-ingest-boom"):
+            server.ingest_repo("https://github.com/psf/requests", "python", None)
+
+
+def test_evaluate_package_tool_raises_on_core_error_dict():
+    err = {"status": "error", "message": "core-eval-boom"}
+    with patch.object(server, "core_inspect_package", return_value=err):
+        with pytest.raises(RuntimeError, match="core-eval-boom"):
+            server.evaluate_package("requests", "python", False)
