@@ -34,6 +34,10 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     strategy:
       fail-fast: false
+      # Cap concurrency so the six shard jobs don't fire their HF Hub snapshot
+      # downloads in the same instant and trip the dataset's 429 rate limit.
+      # Spreading them across waves keeps each request burst small.
+      max-parallel: 2
       matrix:
         ecosystem: [python, npm, crates, go, maven, nuget]
     steps:

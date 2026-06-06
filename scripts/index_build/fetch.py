@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -37,6 +38,36 @@ from pathlib import Path
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+def _hf_download_with_retry(*, attempts: int = 5, base_delay: float = 5.0, **kwargs) -> str:
+    """``hf_hub_download`` with exponential backoff on transient Hub errors.
+
+    The Hub rate-limits bursty access (HTTP 429). huggingface_hub's built-in
+    retry gives up within ~20s, which isn't enough when several shard builds
+    hit the snapshot dataset at once — the 429 surfaces as a fatal
+    ``LocalEntryNotFoundError``. Retry with exponential backoff + jitter so a
+    short rate-limit window is ridden out instead of failing the build.
+    """
+    from huggingface_hub import hf_hub_download  # type: ignore
+
+    for attempt in range(attempts):
+        try:
+            return hf_hub_download(**kwargs)
+        except Exception as e:
+            if attempt == attempts - 1:
+                raise
+            delay = base_delay * 2**attempt + random.uniform(0, base_delay)
+            logger.warning(
+                "HF download failed (attempt %d/%d): %s; retrying in %.0fs",
+                attempt + 1,
+                attempts,
+                e,
+                delay,
+            )
+            time.sleep(delay)
+    raise AssertionError("unreachable")  # pragma: no cover
+
 
 ECOSYSTE_MS_API = "https://packages.ecosyste.ms/api/v1"
 SNAPSHOT_REPO_ID = "priorart/package-snapshot"
@@ -103,13 +134,11 @@ def _iter_fixture(ecosystem: str) -> Iterator[dict]:
 
 def _iter_popular_snapshot(ecosystem: str, top_n: int) -> Iterator[dict]:
     """Yield up to ``top_n`` records from the HF Hub snapshot, ranked by entrenchment."""
-    from huggingface_hub import hf_hub_download  # type: ignore
-
     cfg = ECOSYSTEM_CONFIG[ecosystem]
     sort_key = cfg["popularity_key"]
     registry = cfg["registry"]
 
-    path = hf_hub_download(
+    path = _hf_download_with_retry(
         repo_id=SNAPSHOT_REPO_ID,
         filename=f"{ecosystem}.jsonl",
         repo_type="dataset",
