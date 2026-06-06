@@ -61,6 +61,13 @@ _LANGUAGE_TO_ECOSYSTEM = {
     "rust": "crates",
     "go": "go",
     "golang": "go",
+    "java": "maven",
+    "kotlin": "maven",
+    "scala": "maven",
+    "csharp": "nuget",
+    "c#": "nuget",
+    "dotnet": "nuget",
+    "fsharp": "nuget",
 }
 
 

@@ -59,7 +59,22 @@ def cli() -> None:
     "--language",
     "-l",
     required=True,
-    type=click.Choice(["python", "javascript", "typescript", "go", "rust"], case_sensitive=False),
+    type=click.Choice(
+        [
+            "python",
+            "javascript",
+            "typescript",
+            "go",
+            "rust",
+            "java",
+            "kotlin",
+            "scala",
+            "csharp",
+            "dotnet",
+            "fsharp",
+        ],
+        case_sensitive=False,
+    ),
     help="Programming language",
 )
 @click.option(
@@ -113,7 +128,22 @@ def find(
 @click.option(
     "--language",
     "-l",
-    type=click.Choice(["python", "javascript", "typescript", "go", "rust"], case_sensitive=False),
+    type=click.Choice(
+        [
+            "python",
+            "javascript",
+            "typescript",
+            "go",
+            "rust",
+            "java",
+            "kotlin",
+            "scala",
+            "csharp",
+            "dotnet",
+            "fsharp",
+        ],
+        case_sensitive=False,
+    ),
     help="Programming language for prioritization",
 )
 @click.option("--category", "-c", help="Package category for file prioritization")
@@ -156,7 +186,22 @@ def ingest(
 @click.option(
     "--language",
     "-l",
-    type=click.Choice(["python", "javascript", "typescript", "go", "rust"], case_sensitive=False),
+    type=click.Choice(
+        [
+            "python",
+            "javascript",
+            "typescript",
+            "go",
+            "rust",
+            "java",
+            "kotlin",
+            "scala",
+            "csharp",
+            "dotnet",
+            "fsharp",
+        ],
+        case_sensitive=False,
+    ),
     help="Language hint (inferred from package name shape when omitted)",
 )
 @click.option("--explain", "-e", is_flag=True, help="Include detailed scoring breakdown")

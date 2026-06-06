@@ -36,6 +36,15 @@ def test_ecosystem_for_maps_common_languages():
     assert _ecosystem_for("golang") == "go"
 
 
+def test_ecosystem_for_maps_jvm_and_dotnet():
+    assert _ecosystem_for("java") == "maven"
+    assert _ecosystem_for("kotlin") == "maven"
+    assert _ecosystem_for("scala") == "maven"
+    assert _ecosystem_for("csharp") == "nuget"
+    assert _ecosystem_for("dotnet") == "nuget"
+    assert _ecosystem_for("fsharp") == "nuget"
+
+
 def test_ecosystem_for_rejects_unknown():
     with pytest.raises(ValueError, match="Unsupported language"):
         _ecosystem_for("cobol")
