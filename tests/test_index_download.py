@@ -14,6 +14,7 @@ from priorart.core import index_download
 from priorart.core.index_download import (
     INDEX_DIR_ENV,
     INDEX_URL_ENV,
+    IncompatibleIndexError,
     ShardPaths,
     _download,
     _verify_manifest_signature,
@@ -21,6 +22,14 @@ from priorart.core.index_download import (
     ensure_shard,
     index_dir,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_manifest_memo():
+    """Clear the per-process manifest memo around every test."""
+    index_download._reset_manifest_cache()
+    yield
+    index_download._reset_manifest_cache()
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -266,6 +275,76 @@ def test_ensure_shard_no_expected_hash_skips_check(monkeypatch, tmp_path):
     result = ensure_shard("python", manifest=manifest)
     assert result.usearch_path.exists()
     assert result.metadata_path.exists()
+
+
+def test_check_index_compat_accepts_matching():
+    index_download._check_index_compat(
+        {
+            "embed_model": index_download.EXPECTED_EMBED_MODEL,
+            "embed_dim": index_download.EXPECTED_EMBED_DIM,
+            "dtype": index_download.EXPECTED_DTYPE,
+        }
+    )
+
+
+def test_check_index_compat_accepts_legacy_manifest_without_fields():
+    index_download._check_index_compat({"version": "old", "shards": {}})
+
+
+def test_check_index_compat_rejects_model_mismatch():
+    with pytest.raises(IncompatibleIndexError, match="embed_model"):
+        index_download._check_index_compat({"embed_model": "BAAI/bge-large-en-v1.5"})
+
+
+def test_check_index_compat_rejects_dim_mismatch():
+    with pytest.raises(IncompatibleIndexError, match="embed_dim"):
+        index_download._check_index_compat({"embed_dim": 768})
+
+
+def test_ensure_manifest_memoizes(monkeypatch, tmp_path):
+    monkeypatch.setenv(INDEX_DIR_ENV, str(tmp_path))
+    calls: list[str] = []
+
+    def fake_download(name, dest_dir):
+        calls.append(name)
+        path = dest_dir / name
+        path.write_text('{"version": "2026-06", "shards": {}}' if name == "manifest.json" else "b")
+        return path
+
+    monkeypatch.setattr(index_download, "_download", fake_download)
+    monkeypatch.setattr(index_download, "_verify_manifest_signature", lambda m, b: None)
+
+    first = ensure_manifest()
+    second = ensure_manifest()
+    assert first == second
+    assert calls.count("manifest.json") == 1  # second call served from the memo
+
+    ensure_manifest(force=True)
+    assert calls.count("manifest.json") == 2
+
+
+def test_ensure_manifest_raises_on_incompatible_index(monkeypatch, tmp_path):
+    monkeypatch.setenv(INDEX_DIR_ENV, str(tmp_path))
+
+    def fake_download(name, dest_dir):
+        path = dest_dir / name
+        if name == "manifest.json":
+            path.write_text(json.dumps({"version": "x", "embed_dim": 768, "shards": {}}))
+        else:
+            path.write_text("b")
+        return path
+
+    monkeypatch.setattr(index_download, "_download", fake_download)
+    monkeypatch.setattr(index_download, "_verify_manifest_signature", lambda m, b: None)
+
+    with pytest.raises(IncompatibleIndexError):
+        ensure_manifest()
+
+
+def test_reset_manifest_cache_clears():
+    index_download._MANIFEST_CACHE = {"x": 1}
+    index_download._reset_manifest_cache()
+    assert index_download._MANIFEST_CACHE is None
 
 
 def test_verify_manifest_signature_no_sigstore_is_noop(monkeypatch, tmp_path):
