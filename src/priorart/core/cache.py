@@ -340,7 +340,7 @@ class SQLiteCache:
                 "SELECT COUNT(*) FROM package_signals WHERE package_name = ? AND registry = ?",
                 (package_name, registry),
             )
-            return cursor.fetchone()[0] > 0
+            return bool(cursor.fetchone()[0] > 0)
 
     def clear_stale(self, max_age_days: int = 90) -> int:
         """Remove entries older than max_age_days."""
@@ -350,7 +350,7 @@ class SQLiteCache:
             cursor = conn.execute(
                 "DELETE FROM package_signals WHERE updated_at < ?", (cutoff.isoformat(),)
             )
-            return cursor.rowcount
+            return int(cursor.rowcount)
 
     def update_signal_group(
         self, package_name: str, registry: str, group: str, signals: dict[str, Any]

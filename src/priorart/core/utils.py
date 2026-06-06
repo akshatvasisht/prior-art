@@ -68,7 +68,7 @@ def load_config() -> dict[str, Any]:
     """
     try:
         config_text = files("priorart.data").joinpath("config.yaml").read_text()
-        config = yaml.safe_load(config_text)
+        config: dict[str, Any] = yaml.safe_load(config_text)
 
         # Validate weights
         weight_sum = sum(config["weights"].values())

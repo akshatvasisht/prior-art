@@ -128,9 +128,9 @@ class DepsDevClient:
         major_versions_per_year, release_cv = None, None
 
         if versions:
-            dated = [v for v in versions if v.published_at]
-            if dated:
-                first_release = min(v.published_at for v in dated)
+            release_dates = [v.published_at for v in versions if v.published_at is not None]
+            if release_dates:
+                first_release = min(release_dates)
             latest_version = self._get_latest_stable_version(versions)
 
             if first_release:
@@ -216,16 +216,15 @@ class DepsDevClient:
 
     def _get_latest_stable_version(self, versions: list[VersionInfo]) -> str | None:
         """Get the latest stable (non-prerelease) version."""
-        stable_versions = [
-            v for v in versions if not v.is_prerelease and not v.is_yanked and v.published_at
+        dated = [
+            (v.published_at, v.version)
+            for v in versions
+            if not v.is_prerelease and not v.is_yanked and v.published_at is not None
         ]
-
-        if not stable_versions:
+        if not dated:
             return None
-
-        # Sort by published date
-        stable_versions.sort(key=lambda v: v.published_at, reverse=True)
-        return stable_versions[0].version
+        # Latest by published date.
+        return max(dated)[1]
 
     def _calculate_major_versions_per_year(
         self, versions: list[VersionInfo], first_release: datetime
@@ -259,21 +258,17 @@ class DepsDevClient:
 
     def _calculate_release_cv(self, versions: list[VersionInfo]) -> float:
         """Calculate coefficient of variation for release intervals."""
-        stable_versions = [
-            v for v in versions if not v.is_prerelease and not v.is_yanked and v.published_at
-        ]
+        dates = sorted(
+            v.published_at
+            for v in versions
+            if not v.is_prerelease and not v.is_yanked and v.published_at is not None
+        )
 
-        if len(stable_versions) < 3:
+        if len(dates) < 3:
             return 0.0  # Not enough data
 
-        # Sort by date
-        stable_versions.sort(key=lambda v: v.published_at)
-
-        # Calculate intervals between releases (in days)
-        intervals = []
-        for i in range(1, len(stable_versions)):
-            delta = stable_versions[i].published_at - stable_versions[i - 1].published_at
-            intervals.append(delta.days)
+        # Intervals between consecutive releases (in days).
+        intervals = [(dates[i] - dates[i - 1]).days for i in range(1, len(dates))]
 
         if not intervals:
             return 0.0  # pragma: no cover
@@ -286,7 +281,7 @@ class DepsDevClient:
         variance = sum((x - mean_interval) ** 2 for x in intervals) / len(intervals)
         std_dev = variance**0.5
 
-        return std_dev / mean_interval
+        return float(std_dev / mean_interval)
 
     def _parse_dependency_info(self, version_data: dict) -> DependencyInfo:
         """Parse dependency health information from version data."""

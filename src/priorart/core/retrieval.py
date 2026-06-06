@@ -148,7 +148,7 @@ class Retriever:
     def __init__(self, ecosystem: str):
         self.ecosystem = ecosystem
         self._shard: ShardPaths | None = None
-        self._index = None
+        self._index: Any = None  # usearch.index.Index (imported lazily in _ensure_loaded)
         self._metadata: dict[int, dict[str, Any]] | None = None
         # BM25 index built lazily over the same metadata sidecar so the
         # tokenization cost is paid once and amortized across queries.

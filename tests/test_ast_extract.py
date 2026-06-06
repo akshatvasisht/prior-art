@@ -442,6 +442,13 @@ def test_extract_javascript_preserves_export_after_url_string(extractor):
     assert "realFn" in result
 
 
+def test_strip_comments_and_strings_passthrough_for_unsupported_language(extractor):
+    """For a language without a regex extractor, the source is returned untouched
+    (Python uses ast.parse, so the strip pass is a no-op for it)."""
+    src = 'x = "http://example.com"  # kept verbatim'
+    assert extractor._strip_comments_and_strings(src, "python") == src
+
+
 def test_extract_rust_ignores_string_literal_code(extractor):
     """declarations inside "..." string literals must not be extracted."""
     code = """
