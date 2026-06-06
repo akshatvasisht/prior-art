@@ -7,6 +7,7 @@ Uses SQLite for local persistent storage with parameterized queries for security
 
 import dataclasses
 import logging
+import random
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -18,6 +19,10 @@ from typing import Any
 from platformdirs import user_cache_dir
 
 logger = logging.getLogger(__name__)
+
+# Probability that constructing a cache triggers an opportunistic stale-row
+# sweep. Keeps the DB bounded without scanning on every construction.
+_EVICT_PROBABILITY = 0.02
 
 
 @dataclass
@@ -138,6 +143,24 @@ class SQLiteCache:
         for _ in range(pool_size):
             conn = sqlite3.connect(self.db_path, timeout=10, check_same_thread=False)
             self._pool.put(conn)
+
+        self._maybe_evict_stale()
+
+    def _maybe_evict_stale(self) -> None:
+        """Occasionally prune rows past the retention window so the DB doesn't
+        grow unbounded over a long-lived server's life.
+
+        Probabilistic so it doesn't scan on every construction, and best-effort
+        — an eviction failure must never block cache use.
+        """
+        if random.random() >= _EVICT_PROBABILITY:
+            return
+        try:
+            removed = self.clear_stale()
+            if removed:
+                logger.debug("evicted %d stale cache rows", removed)
+        except Exception as e:
+            logger.debug("opportunistic cache eviction failed: %s", e)
 
     @contextmanager
     def _conn(self):

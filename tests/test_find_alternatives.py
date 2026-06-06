@@ -12,8 +12,14 @@ from priorart.core.find_alternatives import (
     SIGNAL_GROUP_MTTR,
     SIGNAL_GROUP_STARS_FORKS,
     SIGNAL_GROUP_VERSION_GRAPH,
+    _as_datetime,
+    _build_data_quality,
     _collect_package_signals,
     _fetch_fresh_signals,
+    _github_circuit_open,
+    _maybe_trip_github_circuit,
+    _persist_refreshed_groups,
+    _reset_github_circuit,
     _save_to_cache,
     find_alternatives,
 )
@@ -963,3 +969,108 @@ def test_signal_errors_version_graph_post_processing_failure(mock_candidate, moc
     assert "first_release_date" not in signals
     messages = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert any(SIGNAL_GROUP_VERSION_GRAPH in m for m in messages), messages
+
+
+# --- GitHub rate-limit circuit breaker (#8) ---
+
+
+class _FakeGithubError(Exception):
+    def __init__(self, status, headers=None):
+        self.status = status
+        self.headers = headers or {}
+
+
+def test_circuit_trips_on_429_with_reset_header():
+    _reset_github_circuit()
+    import time as _t
+
+    _maybe_trip_github_circuit(_FakeGithubError(429, {"x-ratelimit-reset": str(_t.time() + 30)}))
+    assert _github_circuit_open()
+    _reset_github_circuit()
+
+
+def test_circuit_trips_on_403_default_cooldown_without_header():
+    _reset_github_circuit()
+    _maybe_trip_github_circuit(_FakeGithubError(403))
+    assert _github_circuit_open()
+    _reset_github_circuit()
+
+
+def test_circuit_trips_with_unparseable_reset_header():
+    _reset_github_circuit()
+    _maybe_trip_github_circuit(_FakeGithubError(429, {"x-ratelimit-reset": "nope"}))
+    assert _github_circuit_open()
+    _reset_github_circuit()
+
+
+def test_circuit_ignores_non_ratelimit_error():
+    _reset_github_circuit()
+    _maybe_trip_github_circuit(ValueError("not a rate limit"))
+    assert not _github_circuit_open()
+
+
+# --- per-source persistence (#1) ---
+
+
+def test_persist_refreshed_groups_updates_only_named_sources(mock_candidate):
+    cache = MagicMock()
+    fresh = {"star_count": 10, "latest_version": "2.0"}
+    _persist_refreshed_groups(mock_candidate, fresh, {"github"}, cache)
+    updated_groups = {c.args[2] for c in cache.update_signal_group.call_args_list}
+    assert "repo" in updated_groups  # github source, has star_count
+    assert "version" not in updated_groups  # deps_dev source not requested
+    assert "mttr" not in updated_groups  # github source but no fields present
+
+
+def test_persist_refreshed_groups_swallows_cache_error(mock_candidate):
+    cache = MagicMock()
+    cache.update_signal_group.side_effect = RuntimeError("db locked")
+    _persist_refreshed_groups(mock_candidate, {"star_count": 1}, {"github"}, cache)
+
+
+# --- provenance helpers (#2) ---
+
+
+def test_as_datetime_variants():
+    assert _as_datetime("2020-01-01T00:00:00+00:00").year == 2020
+    assert _as_datetime("not-a-date").tzinfo is not None  # bad string -> now (aware)
+    assert _as_datetime(datetime(2020, 1, 1)).tzinfo is not None  # naive -> utc
+
+
+def test_build_data_quality_marks_fetched_and_missing():
+    pkg = {"star_count": 1, "latest_version": "2.0"}  # repo + version present; rest missing
+    now = datetime.now(timezone.utc)
+    dq = _build_data_quality(pkg, None, set(), now)
+    assert "repo" in dq["signals_fetched"]
+    assert "version" in dq["signals_fetched"]
+    assert "mttr" in dq["signals_missing"]
+    assert dq["data_as_of"] == now.isoformat()
+
+
+def test_collect_signals_warm_cache_emits_data_quality(
+    mock_candidate, mock_config, sample_package_snapshot
+):
+    cache = MagicMock()
+    cache.get.return_value = sample_package_snapshot
+    with patch("priorart.core.find_alternatives._fetch_fresh_signals") as mock_fetch:
+        result = _collect_package_signals(mock_candidate, "python", cache, mock_config, None)
+    mock_fetch.assert_not_called()  # fresh snapshot -> no source refetched
+    assert set(result["data_quality"]["signals_fetched"]) >= {"repo", "version", "dep_health"}
+
+
+def test_stale_source_triggers_partial_refresh(
+    mock_candidate, mock_config, sample_package_snapshot
+):
+    # Expire only the deps.dev groups, leave github/downloads fresh.
+    sample_package_snapshot.version_refreshed_at = datetime.now(timezone.utc) - timedelta(days=999)
+    sample_package_snapshot.dep_health_refreshed_at = datetime.now(timezone.utc) - timedelta(
+        days=999
+    )
+    cache = MagicMock()
+    cache.get.return_value = sample_package_snapshot
+    with patch(
+        "priorart.core.find_alternatives._fetch_fresh_signals", return_value={}
+    ) as mock_fetch:
+        _collect_package_signals(mock_candidate, "python", cache, mock_config, None)
+    mock_fetch.assert_called_once()
+    assert mock_fetch.call_args.kwargs["sources"] == {"deps_dev"}

@@ -13,6 +13,7 @@ Complete pipeline:
 
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -37,6 +38,166 @@ SIGNAL_GROUP_MTTR = "MTTR"
 SIGNAL_GROUP_COMMIT_REGULARITY = "commit-regularity"
 SIGNAL_GROUP_VERSION_GRAPH = "version-graph"
 SIGNAL_GROUP_DEP_HEALTH = "dep-health"
+
+
+# Cache freshness is enforced per source, not per whole row: each signal group
+# has its own window (config.cache_freshness) and belongs to one upstream
+# source, so on a cache hit only the sources whose groups have expired are
+# re-fetched and the rest are served from cache.
+_GROUP_WINDOW_KEY = {
+    "downloads": "weekly_downloads",
+    "repo": "fsr_abandonment",
+    "mttr": "mttr_mad",
+    "regularity": "commit_regularity",
+    "version": "version_graph_stability",
+    "dep_health": "dependency_health",
+}
+_GROUP_SOURCE = {
+    "repo": "github",
+    "mttr": "github",
+    "regularity": "github",
+    "version": "deps_dev",
+    "dep_health": "deps_dev",
+    "downloads": "downloads",
+}
+# Snapshot fields owned by each group, used to refresh just that group in cache.
+_GROUP_FIELDS = {
+    "downloads": ["weekly_downloads"],
+    "repo": [
+        "star_count",
+        "fork_count",
+        "fork_to_star_ratio",
+        "days_since_last_commit",
+        "open_issue_count",
+        "scorecard_overall",
+        "scorecard_reliability_bucket",
+        "scorecard_dep_health_bucket",
+    ],
+    "mttr": ["mttr_median_days", "mttr_mad", "mttr_state", "closed_issues_last_year"],
+    "regularity": ["weekly_commit_cv", "recent_committer_count"],
+    "version": [
+        "first_release_date",
+        "latest_version",
+        "release_cv",
+        "major_versions_per_year",
+        "reverse_dep_count",
+    ],
+    "dep_health": ["direct_dep_count", "vulnerable_dep_count", "deprecated_dep_count"],
+}
+# Field whose presence means a group has real (non-defaulted) data — drives the
+# data_quality provenance block returned to the caller.
+_GROUP_SENTINEL = {
+    "downloads": "weekly_downloads",
+    "repo": "star_count",
+    "mttr": "mttr_state",
+    "regularity": "weekly_commit_cv",
+    "version": "latest_version",
+    "dep_health": "direct_dep_count",
+}
+
+
+# GitHub rate-limit circuit breaker (process-scoped). Once GitHub returns a
+# 403/429, stop calling it until the reported reset time so a rate-limited run
+# fails fast instead of staggering ~10 calls per remaining candidate.
+_GITHUB_COOLDOWN_S = 60.0
+_github_blocked_until = 0.0
+
+
+def _github_circuit_open() -> bool:
+    return time.time() < _github_blocked_until
+
+
+def _maybe_trip_github_circuit(exc: Exception) -> None:
+    """Open the GitHub circuit if ``exc`` is a 403/429 rate-limit, honoring the
+    ``x-ratelimit-reset`` header when present."""
+    global _github_blocked_until
+    if getattr(exc, "status", None) not in (403, 429):
+        return
+    reset = None
+    raw = (getattr(exc, "headers", None) or {}).get("x-ratelimit-reset")
+    if raw is not None:
+        try:
+            reset = float(raw)
+        except (TypeError, ValueError):
+            reset = None
+    _github_blocked_until = reset if reset else time.time() + _GITHUB_COOLDOWN_S
+    logger.warning("GitHub rate limit hit; pausing GitHub signal fetches until reset")
+
+
+def _reset_github_circuit() -> None:
+    """Clear the GitHub circuit. Tests call this to avoid cross-test leakage."""
+    global _github_blocked_until
+    _github_blocked_until = 0.0
+
+
+def _stale_sources(snapshot: SignalSnapshot, config: dict[str, Any]) -> set[str]:
+    """Return the sources owning at least one signal group past its window."""
+    windows = config.get("cache_freshness", {})
+    stale: set[str] = set()
+    for group, source in _GROUP_SOURCE.items():
+        window = windows.get(_GROUP_WINDOW_KEY[group])
+        if window is not None and snapshot.is_signal_group_stale(group, window):
+            stale.add(source)
+    return stale
+
+
+def _persist_refreshed_groups(
+    candidate: PackageCandidate, fresh: dict[str, Any], sources: set[str], cache: SQLiteCache
+) -> None:
+    """Write freshly re-fetched signal groups back to cache, bumping just their
+    refresh timestamps so the other groups keep their own freshness clocks."""
+    for group, fields in _GROUP_FIELDS.items():
+        if _GROUP_SOURCE[group] not in sources:
+            continue
+        payload = {f: fresh[f] for f in fields if f in fresh}
+        if not payload:
+            continue
+        try:
+            cache.update_signal_group(candidate.name, candidate.registry, group, payload)
+        except Exception as e:
+            logger.warning("cache refresh for %s/%s failed: %s", candidate.name, group, e)
+
+
+def _build_data_quality(
+    package_data: dict[str, Any],
+    snapshot: SignalSnapshot | None,
+    refreshed_sources: set[str],
+    now: datetime,
+) -> dict[str, Any]:
+    """Provenance block: which signal groups carry real data, which are missing,
+    and the oldest timestamp behind the data so callers can judge freshness."""
+    fetched: list[str] = []
+    missing: list[str] = []
+    ages: list[datetime] = []
+    for group, sentinel in _GROUP_SENTINEL.items():
+        if package_data.get(sentinel) is None:
+            missing.append(group)
+            continue
+        fetched.append(group)
+        if snapshot is not None and _GROUP_SOURCE[group] not in refreshed_sources:
+            ts = getattr(snapshot, f"{group}_refreshed_at", None)
+            ages.append(_as_datetime(ts) if ts else now)
+        else:
+            ages.append(now)
+    return {
+        "signals_fetched": sorted(fetched),
+        "signals_missing": sorted(missing),
+        "data_as_of": min(ages, default=now).isoformat(),
+    }
+
+
+def _as_datetime(value: Any) -> datetime:
+    """Coerce a stored timestamp (datetime or ISO string) to aware UTC datetime."""
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        try:
+            dt = datetime.fromisoformat(str(value))
+        except ValueError:
+            return datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def find_alternatives(
@@ -275,6 +436,8 @@ def _collect_package_signals(
     package_data["identity_verified"] = identity_verified
 
     # Collect signals from cache or fresh API calls
+    now = datetime.now(timezone.utc)
+    refreshed_sources: set[str] = set()
     if snapshot:
         # Use cached data
         package_data.update(
@@ -304,6 +467,12 @@ def _collect_package_signals(
                 "scorecard_dep_health_bucket": snapshot.scorecard_dep_health_bucket,
             }
         )
+        # Per-source freshness: refetch only the sources whose groups expired.
+        refreshed_sources = _stale_sources(snapshot, config)
+        if refreshed_sources:
+            fresh = _fetch_fresh_signals(candidate, github_url, config, sources=refreshed_sources)
+            package_data.update(fresh)
+            _persist_refreshed_groups(candidate, fresh, refreshed_sources, cache)
     else:
         # Fetch fresh data (cold cache)
         package_data.update(_fetch_fresh_signals(candidate, github_url, config))
@@ -314,11 +483,17 @@ def _collect_package_signals(
         except Exception as e:
             logger.warning(f"Failed to save cache for {candidate.name}: {e}")
 
+    package_data["data_quality"] = _build_data_quality(
+        package_data, snapshot, refreshed_sources, now
+    )
     return package_data
 
 
 def _fetch_fresh_signals(
-    candidate: PackageCandidate, github_url: str, config: dict[str, Any]
+    candidate: PackageCandidate,
+    github_url: str,
+    config: dict[str, Any],
+    sources: set[str] | None = None,
 ) -> dict[str, Any]:
     """Fetch fresh signals from APIs.
 
@@ -326,17 +501,22 @@ def _fetch_fresh_signals(
         candidate: package candidate from registry
         github_url: verified GitHub URL
         config: system configuration
+        sources: when given, fetch only these sources ("github", "deps_dev",
+            "downloads"); ``None`` fetches all (cold-cache path).
 
     Returns:
         Dictionary of collected signals
     """
     signals: dict[str, Any] = {}
+    want_github = sources is None or "github" in sources
+    want_deps = sources is None or "deps_dev" in sources
+    want_downloads = sources is None or "downloads" in sources
 
     # Get GitHub signals — split into per-group try blocks so a failure in one
     # signal-group (MTTR, commit-regularity) does not lose the others, and the
     # log message identifies which group broke for operator triage.
     github_token = os.getenv("GITHUB_TOKEN")
-    if github_token:
+    if github_token and want_github and not _github_circuit_open():
         github_client: GitHubClient | None = None
         repository = None
         repo_slug = github_url
@@ -351,6 +531,7 @@ def _fetch_fresh_signals(
                 repo_slug = f"{owner}/{repo}"
                 repository = github_client.github.get_repo(repo_slug)
         except Exception as e:
+            _maybe_trip_github_circuit(e)
             logger.warning(
                 f"GitHub {SIGNAL_GROUP_STARS_FORKS} fetch failed for %s: %s", repo_slug, e
             )
@@ -385,6 +566,7 @@ def _fetch_fresh_signals(
                 signals["mttr_state"] = mttr_state
                 signals["closed_issues_last_year"] = closed_count
             except Exception as e:
+                _maybe_trip_github_circuit(e)
                 logger.warning(f"GitHub {SIGNAL_GROUP_MTTR} fetch failed for %s: %s", repo_slug, e)
 
             try:
@@ -402,13 +584,14 @@ def _fetch_fresh_signals(
     # one section (e.g. dep-health) does not drop the others (e.g. version-graph),
     # and the log identifies which group broke for operator triage.
     deps_data: DepsDevData | None = None
-    try:
-        with DepsDevClient() as deps_client:
-            deps_data = deps_client.get_package_data(candidate.name, candidate.registry)
-    except Exception as e:
-        logger.warning(
-            f"deps.dev {SIGNAL_GROUP_VERSION_GRAPH} fetch failed for %s: %s", candidate.name, e
-        )
+    if want_deps:
+        try:
+            with DepsDevClient() as deps_client:
+                deps_data = deps_client.get_package_data(candidate.name, candidate.registry)
+        except Exception as e:
+            logger.warning(
+                f"deps.dev {SIGNAL_GROUP_VERSION_GRAPH} fetch failed for %s: %s", candidate.name, e
+            )
 
     if deps_data:
         try:
@@ -439,12 +622,12 @@ def _fetch_fresh_signals(
                 )
 
     # Add download data from candidate
-    if candidate.weekly_downloads:
+    if want_downloads and candidate.weekly_downloads:
         signals["weekly_downloads"] = candidate.weekly_downloads
 
-    # OpenSSF Scorecard (optional, public, no auth)
+    # OpenSSF Scorecard (optional, public, no auth) — part of the github source.
     parsed = parse_github_url(github_url)
-    if parsed:
+    if parsed and want_github:
         owner, repo = parsed
         try:
             with ScorecardClient() as sc:
