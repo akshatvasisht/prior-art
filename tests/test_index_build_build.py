@@ -1,8 +1,8 @@
-"""Tests for scripts.index_build.build — focused on per-ecosystem top_n resolution.
+"""Tests for scripts.index_build.build — top_n resolution and content-hash identity.
 
 The actual shard build path (fastembed + usearch) is exercised by integration
-tests + CI workflow runs; these unit tests pin the cap-resolution contract so
-The per-ecosystem calibration doesn't silently regress.
+tests + CI workflow runs; these unit tests pin the cap-resolution contract and
+the content-hash gate that drives incremental vector reuse.
 """
 
 from __future__ import annotations
@@ -55,3 +55,27 @@ def test_resolve_top_n_falls_back_for_unknown_ecosystem():
     build script tolerant of new ecosystems added before DEFAULT_TOP_N is
     updated, at the cost of a generic 20K cap until calibrated."""
     assert build._resolve_top_n("ruby", override=None) == build.FALLBACK_TOP_N
+
+
+def test_content_hash_is_deterministic():
+    """Identical input must hash identically so unchanged records are reused."""
+    assert build._content_hash("requests", "http client") == build._content_hash(
+        "requests", "http client"
+    )
+
+
+def test_content_hash_changes_with_text():
+    """A change to the name or description invalidates the prior vector."""
+    base = build._content_hash("requests", "http client")
+    assert build._content_hash("requests", "HTTP client") != base
+    assert build._content_hash("urllib3", "http client") != base
+
+
+def test_content_hash_changes_with_model_or_dim(monkeypatch):
+    """Swapping the embedding model or dimension forces a full re-embed."""
+    base = build._content_hash("requests", "http client")
+    monkeypatch.setattr(build, "EMBED_MODEL_NAME", "BAAI/bge-base-en-v1.5")
+    assert build._content_hash("requests", "http client") != base
+    monkeypatch.setattr(build, "EMBED_MODEL_NAME", "BAAI/bge-small-en-v1.5")
+    monkeypatch.setattr(build, "EMBED_DIM", 768)
+    assert build._content_hash("requests", "http client") != base
