@@ -21,6 +21,18 @@ Heuristic:
 The script is offline-replayable: README markdown is pinned under
 ``bench/fixtures/awesome-snapshots/``. Regenerating is a deliberate act
 (``python bench/build_gold_standard.py --refresh`` fetches fresh copies).
+
+Refresh protocol (intentional and manual — there is no CI cron). A benchmark
+answer key must stay a frozen, comparable artifact between runs; auto-churning
+it breaks score comparability and ships drift without an evaluation signal. So
+refresh only when the source materially changes (e.g. adding an ecosystem), and:
+
+1. ``python bench/build_gold_standard.py --refresh`` to fetch fresh snapshots.
+2. Review the ``gold_standard.jsonl`` diff for category drift — the awesome-list
+   source is noisy (meta-list leaks, application-vs-library conflation).
+3. Run ``python -m bench.run`` against the new fixture and record the score
+   delta, so a fixture change is never merged without an evaluation signal.
+4. Commit the reviewed fixture and its snapshots together.
 """
 
 from __future__ import annotations
