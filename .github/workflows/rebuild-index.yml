@@ -148,16 +148,46 @@ jobs:
         run: |
           python - <<'PY'
           import os
+          import random
+          import time
+
           from huggingface_hub import HfApi
 
           api = HfApi(token=os.environ["HF_TOKEN"])
           repo_id = os.environ["HF_REPO_ID"]
-          api.create_repo(repo_id, repo_type="dataset", exist_ok=True, private=False)
-          api.upload_folder(
-              folder_path="dist/index",
-              repo_id=repo_id,
-              repo_type="dataset",
-              commit_message=f"Rebuild index {os.environ.get('GITHUB_SHA', '')[:7]}",
+
+
+          def _with_retry(label, fn, *, attempts=4, base_delay=5.0):
+              # Mirror the build-side _hf_download_with_retry backoff: a transient
+              # HF Hub 429 on create_repo / upload_folder must not discard a full
+              # six-shard build at the final publish step.
+              for attempt in range(attempts):
+                  try:
+                      return fn()
+                  except Exception as e:
+                      if attempt == attempts - 1:
+                          raise
+                      delay = base_delay * 2**attempt + random.uniform(0, base_delay)
+                      print(
+                          f"{label} failed (attempt {attempt + 1}/{attempts}): "
+                          f"{e}; retrying in {delay:.0f}s",
+                          flush=True,
+                      )
+                      time.sleep(delay)
+
+
+          _with_retry(
+              "create_repo",
+              lambda: api.create_repo(repo_id, repo_type="dataset", exist_ok=True, private=False),
+          )
+          _with_retry(
+              "upload_folder",
+              lambda: api.upload_folder(
+                  folder_path="dist/index",
+                  repo_id=repo_id,
+                  repo_type="dataset",
+                  commit_message=f"Rebuild index {os.environ.get('GITHUB_SHA', '')[:7]}",
+              ),
           )
           PY
 
