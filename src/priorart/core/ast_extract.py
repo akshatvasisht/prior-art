@@ -7,6 +7,7 @@ Extracts public interfaces from source files to fit within character budget.
 import ast
 import logging
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -161,7 +162,7 @@ class InterfaceExtractor:
         else:
             return f"{signature}\n    ..."
 
-    def _extract_method(self, node: ast.FunctionDef) -> str:
+    def _extract_method(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
         """Extract method signature (indented for class)."""
         func_str = self._extract_function(node)
         # Indent each line
@@ -344,7 +345,7 @@ class InterfaceExtractor:
 
         extension = file_path.suffix.lower()
 
-        extractors = {
+        extractors: dict[str, Callable[[str], str]] = {
             ".py": self.extract_python,
             ".pyi": lambda c: c,  # Type stubs are already interface-only
             ".ts": self.extract_typescript,

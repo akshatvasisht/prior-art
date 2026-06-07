@@ -42,10 +42,21 @@ EMBED_DIM = 384
 SIMILARITY_FLOOR = 0.5
 
 
-def _similarity_floor() -> float:
-    """Resolve the similarity floor from config, falling back to the default."""
+def _similarity_floor(ecosystem: str) -> float:
+    """Resolve the similarity floor for ``ecosystem`` from config.
+
+    ``retrieval.similarity_floor`` may be a single float (applies everywhere)
+    or a mapping with per-ecosystem overrides plus a ``default`` key. Falls
+    back to ``SIMILARITY_FLOOR`` on any miss or error.
+    """
     try:
-        return float(load_config()["retrieval"].get("similarity_floor", SIMILARITY_FLOOR))
+        configured = load_config()["retrieval"].get("similarity_floor", SIMILARITY_FLOOR)
+        if isinstance(configured, dict):
+            floor = configured.get(ecosystem)
+            if floor is None:
+                floor = configured.get("default", SIMILARITY_FLOOR)
+            return float(floor)
+        return float(configured)
     except Exception:
         return SIMILARITY_FLOOR
 
@@ -148,7 +159,7 @@ class Retriever:
     def __init__(self, ecosystem: str):
         self.ecosystem = ecosystem
         self._shard: ShardPaths | None = None
-        self._index = None
+        self._index: Any = None  # usearch.index.Index (imported lazily in _ensure_loaded)
         self._metadata: dict[int, dict[str, Any]] | None = None
         # BM25 index built lazily over the same metadata sidecar so the
         # tokenization cost is paid once and amortized across queries.
@@ -279,13 +290,13 @@ def retrieve_candidates(
     search path directly (no shard download, no embedding model load).
     """
     # Validate language even in lite mode so errors stay consistent.
-    _ecosystem_for(language)
+    ecosystem = _ecosystem_for(language)
 
     if lite:
         return _registry_fallback(task_description, language, max_results)
 
     try:
-        retriever = _retriever_for(_ecosystem_for(language))
+        retriever = _retriever_for(ecosystem)
         # max_results is the *output* size; we retrieve a deeper pool from
         # each retriever so RRF has enough material to re-rank meaningfully.
         pool = max(HYBRID_POOL, max_results)
@@ -294,7 +305,7 @@ def retrieve_candidates(
         logger.warning(f"Semantic index unavailable ({e}); falling back to registry search")
         return _registry_fallback(task_description, language, max_results)
 
-    if not dense_hits or dense_hits[0].similarity < _similarity_floor():
+    if not dense_hits or dense_hits[0].similarity < _similarity_floor(ecosystem):
         logger.info(
             "Top semantic match below floor "
             f"({dense_hits[0].similarity if dense_hits else 'n/a'}); "

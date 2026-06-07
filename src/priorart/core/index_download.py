@@ -195,7 +195,7 @@ def ensure_manifest(force: bool = False) -> dict[str, Any]:
         manifest_path.unlink(missing_ok=True)
         raise RuntimeError(f"Index manifest signature verification failed: {e}") from e
 
-    manifest = json.loads(manifest_path.read_text())
+    manifest: dict[str, Any] = json.loads(manifest_path.read_text())
     _check_index_compat(manifest)
     _MANIFEST_CACHE = manifest
     return manifest

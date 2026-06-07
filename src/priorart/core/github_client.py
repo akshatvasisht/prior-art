@@ -111,13 +111,14 @@ class GitHubClient:
             # Get release tags
             try:
                 releases = repository.get_releases()
-                signals.release_tags = [r.tag_name for r in releases[:20]]
+                # PyGithub's PaginatedList slice leaves the element type unbound.
+                signals.release_tags = [r.tag_name for r in releases[:20]]  # type: ignore[var-annotated]
                 self._stagger()
             except GithubException:
                 # Some repos don't have releases, try tags instead
                 try:
                     tags = repository.get_tags()
-                    signals.release_tags = [t.name for t in tags[:20]]
+                    signals.release_tags = [t.name for t in tags[:20]]  # type: ignore[var-annotated]
                     self._stagger()
                 except GithubException:
                     pass
@@ -125,7 +126,7 @@ class GitHubClient:
             # Get top contributors
             try:
                 contributors = repository.get_contributors()
-                signals.top_contributors = [c.login for c in contributors[:10]]
+                signals.top_contributors = [c.login for c in contributors[:10]]  # type: ignore[var-annotated]
                 self._stagger()
             except GithubException:
                 pass
@@ -234,7 +235,7 @@ class GitHubClient:
             commits = repo.get_commits(since=since)
 
             # Group commits by week
-            weekly_counts = {}
+            weekly_counts: dict[tuple[int, int], int] = {}
             unique_committers = set()
             recent_cutoff = datetime.now(timezone.utc) - timedelta(days=90)
 

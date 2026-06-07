@@ -299,7 +299,7 @@ def find_alternatives(
         # Format output
         results = []
         for pkg in top_packages:
-            result = {
+            result: dict[str, Any] = {
                 "name": pkg.name,
                 "full_name": pkg.full_name,
                 "url": pkg.url,
@@ -369,7 +369,7 @@ def _collect_package_signals(
         Dictionary of signals or None if GitHub URL not found
     """
 
-    package_data = {
+    package_data: dict[str, Any] = {
         "name": candidate.name,
         "package_name": candidate.name,
         "registry": candidate.registry,
@@ -651,7 +651,7 @@ def _latest_stable_published_at(deps_data: DepsDevData) -> datetime | None:
         return None
     for v in versions:
         if getattr(v, "version", None) == deps_data.latest_version:
-            pub = getattr(v, "published_at", None)
+            pub: datetime | None = getattr(v, "published_at", None)
             if pub is not None:
                 return pub
     return None

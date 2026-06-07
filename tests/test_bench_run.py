@@ -126,6 +126,23 @@ def test_bench_run_per_language_main_output(tmp_path: Path, capsys):
     # Overall must be the last key — the printed JSON is what the user reads,
     # so insertion order matters for "overall last" UX.
     assert list(results.keys())[-1] == "overall"
+    # Peak RSS is surfaced in the meta so memory regressions are visible.
+    assert isinstance(payload["meta"]["peak_rss_mb"], (int, float))
+    assert payload["meta"]["peak_rss_mb"] > 0
+
+
+def test_peak_rss_mb_converts_bytes_on_macos(monkeypatch):
+    # On macOS/BSD ru_maxrss is bytes, not KB — convert by 1024**2, not 1024.
+    fake = type("RU", (), {"ru_maxrss": 1024**2})()
+    monkeypatch.setattr(bench_run.sys, "platform", "darwin")
+    monkeypatch.setattr(bench_run.resource, "getrusage", lambda _who: fake)
+    assert bench_run._peak_rss_mb() == 1.0
+
+
+def test_peak_rss_mb_returns_positive_float():
+    rss = bench_run._peak_rss_mb()
+    assert isinstance(rss, float)
+    assert rss > 0
 
 
 def test_git_rev_parse_returns_unknown_on_failure():

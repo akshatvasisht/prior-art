@@ -119,9 +119,9 @@ class PyPIClient(RegistryClient):
             project_urls = info.get("project_urls") or {}
 
             for key in ["Source", "Repository", "Source Code", "Code"]:
-                url = project_urls.get(key)
-                if url:
-                    validated = validate_github_url(url)
+                candidate_url = project_urls.get(key)
+                if candidate_url:
+                    validated = validate_github_url(candidate_url)
                     if validated:
                         github_url = validated
                         break
@@ -190,7 +190,7 @@ class NPMClient(RegistryClient):
     def search(self, query: str, max_results: int = 20) -> list[PackageCandidate]:
         """Search npm for packages using npms.io API."""
         try:
-            params = {"q": query, "size": max_results}
+            params: dict[str, str | int] = {"q": query, "size": max_results}
 
             response = self.client.get(self.SEARCH_URL, params=params)
             response.raise_for_status()
@@ -302,7 +302,7 @@ class CratesIOClient(RegistryClient):
     def search(self, query: str, max_results: int = 20) -> list[PackageCandidate]:
         """Search crates.io for packages."""
         try:
-            params = {"q": query, "per_page": max_results}
+            params: dict[str, str | int] = {"q": query, "per_page": max_results}
 
             response = self.client.get(f"{self.BASE_URL}/crates", params=params)
             response.raise_for_status()
