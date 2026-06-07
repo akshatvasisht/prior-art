@@ -27,6 +27,7 @@ import json
 import logging
 import resource
 import subprocess
+import sys
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -188,13 +189,18 @@ def build_meta(fixture_path: Path) -> dict[str, Any]:
 
 
 def _peak_rss_mb() -> float:
-    """Peak resident memory of this process in MB (Linux ``ru_maxrss`` is KB).
+    """Peak resident memory of this process in MB.
+
+    ``ru_maxrss`` is reported in KB on Linux but in bytes on macOS/BSD, so the
+    conversion to MB is platform-dependent.
 
     Surfaced so a memory regression — e.g. loading all six ecosystems' shards +
     BM25 indices after a top_n bump — shows up in bench output rather than only
     at OOM time.
     """
-    return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)
+    raw = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    mb = raw / 1024 if sys.platform.startswith("linux") else raw / 1024**2
+    return round(mb, 1)
 
 
 def main() -> None:

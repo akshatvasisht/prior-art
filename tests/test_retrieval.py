@@ -40,6 +40,15 @@ def test_similarity_floor_falls_back_on_config_error(monkeypatch):
     assert _similarity_floor("python") == SIMILARITY_FLOOR
 
 
+def test_similarity_floor_falls_back_on_non_numeric_value(monkeypatch):
+    # A non-numeric configured value must not escape the float() conversion —
+    # the documented contract is to fall back, not raise.
+    monkeypatch.setattr(
+        retrieval, "load_config", lambda: {"retrieval": {"similarity_floor": "high"}}
+    )
+    assert _similarity_floor("python") == SIMILARITY_FLOOR
+
+
 def test_similarity_floor_per_ecosystem_mapping(monkeypatch):
     monkeypatch.setattr(
         retrieval,

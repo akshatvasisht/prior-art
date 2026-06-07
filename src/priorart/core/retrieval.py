@@ -51,14 +51,14 @@ def _similarity_floor(ecosystem: str) -> float:
     """
     try:
         configured = load_config()["retrieval"].get("similarity_floor", SIMILARITY_FLOOR)
+        if isinstance(configured, dict):
+            floor = configured.get(ecosystem)
+            if floor is None:
+                floor = configured.get("default", SIMILARITY_FLOOR)
+            return float(floor)
+        return float(configured)
     except Exception:
         return SIMILARITY_FLOOR
-    if isinstance(configured, dict):
-        floor = configured.get(ecosystem)
-        if floor is None:
-            floor = configured.get("default", SIMILARITY_FLOOR)
-        return float(floor)
-    return float(configured)
 
 
 # how many candidates to ask each retriever (dense, BM25) for before RRF
