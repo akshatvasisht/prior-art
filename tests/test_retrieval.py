@@ -24,12 +24,12 @@ from priorart.core.retrieval import (
 
 
 def test_similarity_floor_reads_config():
-    assert _similarity_floor() == 0.5  # from config.yaml retrieval.similarity_floor
+    assert _similarity_floor("python") == 0.5  # single float in config.yaml
 
 
 def test_similarity_floor_falls_back_when_key_missing(monkeypatch):
     monkeypatch.setattr(retrieval, "load_config", lambda: {"retrieval": {}})
-    assert _similarity_floor() == SIMILARITY_FLOOR
+    assert _similarity_floor("python") == SIMILARITY_FLOOR
 
 
 def test_similarity_floor_falls_back_on_config_error(monkeypatch):
@@ -37,7 +37,23 @@ def test_similarity_floor_falls_back_on_config_error(monkeypatch):
         raise RuntimeError("no config")
 
     monkeypatch.setattr(retrieval, "load_config", _boom)
-    assert _similarity_floor() == SIMILARITY_FLOOR
+    assert _similarity_floor("python") == SIMILARITY_FLOOR
+
+
+def test_similarity_floor_per_ecosystem_mapping(monkeypatch):
+    monkeypatch.setattr(
+        retrieval,
+        "load_config",
+        lambda: {"retrieval": {"similarity_floor": {"default": 0.55, "npm": 0.45}}},
+    )
+    assert _similarity_floor("npm") == 0.45  # per-ecosystem override
+    assert _similarity_floor("python") == 0.55  # falls to the mapping's default
+
+    # Mapping without a default: an unlisted ecosystem uses the in-code fallback.
+    monkeypatch.setattr(
+        retrieval, "load_config", lambda: {"retrieval": {"similarity_floor": {"npm": 0.45}}}
+    )
+    assert _similarity_floor("go") == SIMILARITY_FLOOR
 
 
 def test_fuse_and_hydrate_returns_empty_for_nonpositive_max_results():

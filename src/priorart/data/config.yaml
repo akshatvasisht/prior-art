@@ -101,4 +101,7 @@ security:
 # Retrieval
 retrieval:
   max_candidates: 20                     # Max candidates returned from semantic index or registry fallback
-  similarity_floor: 0.5                  # Cosine floor; below this, fall back to live registry search
+  # Cosine floor; below this, fall back to live registry search. A single float
+  # applies to all ecosystems; a mapping (e.g. {default: 0.5, npm: 0.45}) sets
+  # per-ecosystem floors once bench data justifies them.
+  similarity_floor: 0.5
