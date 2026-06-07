@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import resource
 import subprocess
 from collections import defaultdict
 from collections.abc import Callable
@@ -186,6 +187,16 @@ def build_meta(fixture_path: Path) -> dict[str, Any]:
     }
 
 
+def _peak_rss_mb() -> float:
+    """Peak resident memory of this process in MB (Linux ``ru_maxrss`` is KB).
+
+    Surfaced so a memory regression — e.g. loading all six ecosystems' shards +
+    BM25 indices after a top_n bump — shows up in bench output rather than only
+    at OOM time.
+    """
+    return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     parser = argparse.ArgumentParser()
@@ -204,10 +215,12 @@ def main() -> None:
     # One JSON envelope (meta + results) makes downstream parsing trivial:
     # `jq .meta`, `jq .results.overall`. Splitting into two prints would
     # force consumers to handle a multi-document stream.
-    output = {
-        "meta": build_meta(args.fixture),
-        "results": evaluate_stratified(gold, args.k, baselines),
-    }
+    # Evaluate first so peak RSS captures the shards + BM25 indices loaded
+    # during retrieval, not just the pre-load baseline.
+    results = evaluate_stratified(gold, args.k, baselines)
+    meta = build_meta(args.fixture)
+    meta["peak_rss_mb"] = _peak_rss_mb()
+    output = {"meta": meta, "results": results}
     print(json.dumps(output, indent=2))
 
 
