@@ -1,10 +1,13 @@
 """
 Minimal IR metrics for the priorart retrieval benchmark.
 
-We compute the same three metrics BEIR reports — nDCG@k, Recall@k, MRR — but
-keep the implementation inline so the benchmark can run without pulling the
-full BEIR dependency tree. Swap in ``beir.retrieval.evaluation.EvaluateRetrieval``
-when/if we start using BEIR's shared corpora.
+We compute nDCG@k, Recall@k, and MRR (as BEIR does) inline so the benchmark can
+run without the full BEIR dependency tree. Because the gold standard is
+positives-only and single-pool (incomplete judgments), we also report two
+incompleteness-robust metrics: ``condensed_ndcg_at_k`` (Sakai 2007 — drop
+unjudged docs before scoring) and ``success_at_k`` (any hit in top-k). See
+``agentcontext/A17_NPM_INVESTIGATION.md`` §6 for why raw nDCG@10 understates
+quality here.
 
 Relevance is graded ({1, 2}): top awesome-list entries within a category are
 treated as the maintainer's "top picks" (grade=2) and the rest as still-relevant
@@ -53,6 +56,32 @@ def reciprocal_rank(relevant: Mapping[str, int], ranked: list[str]) -> float:
         if relevant.get(name, 0) > 0:
             return 1.0 / (i + 1)
     return 0.0
+
+
+def condensed_ndcg_at_k(relevant: Mapping[str, int], ranked: list[str], k: int) -> float:
+    """Condensed-list nDCG@k (Sakai 2007), robust to incomplete judgments.
+
+    The gold standard is positives-only and single-pool: many genuinely-relevant
+    packages a retriever returns were simply never judged (awesome-list omitted
+    them) and would otherwise count as misses, deflating the score. The condensed
+    list drops every *unjudged* doc from the ranking before scoring, so a system
+    isn't punished for ranking a plausible-but-unjudged package above the curated
+    gold. With positives-only gold "judged" == "relevant", so this measures how
+    well the *retrieved* relevant docs are ordered, ignoring unjudged noise.
+    """
+    condensed = [name for name in _dedupe(ranked) if relevant.get(name, 0) > 0]
+    return ndcg_at_k(relevant, condensed, k)
+
+
+def success_at_k(relevant: Mapping[str, int], ranked: list[str], k: int) -> float:
+    """Success@k (a.k.a. Hit@k): 1.0 if any grade>=1 doc is in the top-k, else 0.
+
+    The most incompleteness-robust signal — a single surviving judged positive
+    scores it, and a missing judgment can only ever lower it, never inflate it.
+    Aligned with the top-k the product actually shows the user.
+    """
+    ranked = _dedupe(ranked)
+    return 1.0 if any(relevant.get(name, 0) > 0 for name in ranked[:k]) else 0.0
 
 
 def aggregate(per_query: list[dict]) -> dict[str, float]:

@@ -12,7 +12,7 @@ and cosine similarity (-1 to 1).
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from rank_bm25 import BM25Okapi
 
@@ -47,6 +47,8 @@ def reciprocal_rank_fusion(
     rankings: Sequence[Sequence[str]],
     k: int = DEFAULT_RRF_K,
     weights: Sequence[float] | None = None,
+    priors: Mapping[str, float] | None = None,
+    prior_weight: float = 0.0,
 ) -> list[str]:
     """Fuse multiple ranked lists into one via Reciprocal Rank Fusion.
 
@@ -55,11 +57,21 @@ def reciprocal_rank_fusion(
     if absent). Ties are broken by insertion order, which mirrors Python's
     stable sort.
 
+    An optional **prior** (e.g. a popularity score) can be convex-blended into
+    the fused score: the RRF scores are min-max normalized to ``[0, 1]`` and
+    combined as ``(1 - prior_weight) * rrf_norm + prior_weight * prior``. Only
+    docs already present in the fused set are re-ranked — a prior never injects
+    a doc that neither retriever surfaced. ``prior_weight == 0`` is a no-op, and
+    because the normalization is monotone, an all-zero prior preserves order.
+
     Args:
         rankings: Sequence of ranked lists. Each list is doc identifiers in
             descending relevance.
         k: RRF damping constant. See module docstring.
         weights: Per-ranking weight. Defaults to uniform 1.0.
+        priors: Optional per-doc prior score in ``[0, 1]``. Missing docs default
+            to 0.0.
+        prior_weight: Convex weight on the prior in ``[0, 1]``. 0 disables it.
 
     Returns:
         Fused ranking (descending). Empty if no input rankings yield any docs.
@@ -76,6 +88,13 @@ def reciprocal_rank_fusion(
     for rank_list, weight in zip(rankings, weights, strict=True):
         for i, doc in enumerate(rank_list):
             scores[doc] = scores.get(doc, 0.0) + weight / (k + i + 1)
+
+    if priors is not None and prior_weight > 0.0 and scores:
+        lo = min(scores.values())
+        span = max(scores.values()) - lo
+        for doc in scores:
+            rrf_norm = (scores[doc] - lo) / span if span else 0.0
+            scores[doc] = (1.0 - prior_weight) * rrf_norm + prior_weight * priors.get(doc, 0.0)
 
     # Stable sort preserves first-seen order on ties — meaningful when two
     # docs only appear in one ranking each at identical positions.

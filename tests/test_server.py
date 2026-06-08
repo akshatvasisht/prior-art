@@ -96,3 +96,32 @@ def test_evaluate_package_tool_raises_on_core_error_dict():
     with patch.object(server, "core_inspect_package", return_value=err):
         with pytest.raises(RuntimeError, match="core-eval-boom"):
             server.evaluate_package("requests", "python", False)
+
+
+# --- end-to-end stdio transport (A21) ---
+
+
+@pytest.mark.integration
+def test_server_stdio_lists_tools_over_jsonrpc():
+    """Spawn priorart-server over stdio and exchange real MCP JSON-RPC frames.
+
+    Unlike the registration tests above (which import the module), this drives
+    the actual transport: an `initialize` handshake followed by `tools/list`
+    must surface all three tools. Marked integration — it spawns a subprocess,
+    so it runs in the gated job rather than the fast PR suite.
+    """
+    import sys
+
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+
+    async def _list_tools() -> set[str]:
+        params = StdioServerParameters(command=sys.executable, args=["-m", "priorart.server"])
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.list_tools()
+                return {tool.name for tool in result.tools}
+
+    names = asyncio.run(_list_tools())
+    assert {"find_alternatives", "evaluate_package", "ingest_repo"} <= names

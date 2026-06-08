@@ -261,8 +261,13 @@ class TestGetPackageData:
         return resp
 
     def test_full_success(self):
-        """Complete get_package_data with all enrichment."""
-        # Package response
+        """Complete get_package_data with all enrichment.
+
+        deps.dev v3 embeds the version history in the package response itself,
+        so there is no separate /versions list call — only the per-version
+        detail call (``/versions/{version}``) for dependency info.
+        """
+        # Package response — versions are embedded inline (v3 shape).
         pkg_resp = self._mock_response(
             200,
             {
@@ -271,13 +276,6 @@ class TestGetPackageData:
                     "type": "GITHUB",
                     "url": "https://github.com/psf/requests",
                 },
-            },
-        )
-
-        # Versions response
-        versions_resp = self._mock_response(
-            200,
-            {
                 "versions": [
                     {
                         "versionKey": {"version": "1.0.0"},
@@ -289,11 +287,11 @@ class TestGetPackageData:
                         "publishedAt": "2023-06-01T00:00:00Z",
                         "isYanked": False,
                     },
-                ]
+                ],
             },
         )
 
-        # Version detail response
+        # Version detail response (dependency info for the latest version).
         detail_resp = self._mock_response(
             200,
             {
@@ -310,14 +308,15 @@ class TestGetPackageData:
             },
         )
 
-        call_count = [0]
+        # Reverse-dependency count (v3alpha :dependents resource).
+        dependents_resp = self._mock_response(200, {"dependentCount": 150000})
 
         def side_effect(url):
-            call_count[0] += 1
-            if "/versions/" in url and call_count[0] > 2:
+            if ":dependents" in url:
+                return dependents_resp
+            # The per-version detail call carries a version in the path.
+            if "/versions/" in url:
                 return detail_resp
-            if "/versions" in url:
-                return versions_resp
             return pkg_resp
 
         self.client.client.get = side_effect
@@ -340,30 +339,29 @@ class TestGetPackageData:
         result = self.client.get_package_data("nonexistent", "pypi")
         assert result is None
 
-    def test_versions_failure_graceful(self):
-        """Versions call failure still returns package data."""
+    def test_no_versions_graceful(self):
+        """A package response with no embedded versions still returns data.
+
+        With no versions there is no first_release_date and no per-version
+        detail call — the package metadata (revdep, source repo) is still
+        returned rather than erroring.
+        """
         pkg_resp = self._mock_response(
             200,
             {
-                "dependentCount": 100,
                 "sourceRepository": {},
+                "versions": [],
             },
         )
-
-        call_count = [0]
-
-        def side_effect(url):
-            call_count[0] += 1
-            if "/versions" in url:
-                raise ConnectionError("timeout")
-            return pkg_resp
-
-        self.client.client.get = side_effect
+        self.client.client.get = MagicMock(return_value=pkg_resp)
 
         data = self.client.get_package_data("pkg", "npm")
         assert data is not None
         assert data.versions == []
-        assert data.reverse_dep_count == 100
+        assert data.first_release_date is None
+        assert data.latest_version is None
+        # No version → no :dependents call → count stays 0.
+        assert data.reverse_dep_count == 0
 
     def test_unsupported_ecosystem(self):
         """Unsupported ecosystem returns None."""
@@ -416,6 +414,35 @@ def test_get_identity_fallback_no_data():
 
     url = client.get_identity_fallback("nonexistent", "pypi")
     assert url is None
+
+
+# --- _fetch_dependent_count (v3alpha :dependents) ---
+
+
+def test_fetch_dependent_count():
+    client = DepsDevClient.__new__(DepsDevClient)
+    client.client = MagicMock()
+
+    ok = MagicMock(status_code=200)
+    ok.json.return_value = {"dependentCount": 2161}
+    client.client.get = MagicMock(return_value=ok)
+    assert client._fetch_dependent_count("pypi", "requests", "2.32.3") == 2161
+    # The version-scoped v3alpha resource is the one queried.
+    assert ":dependents" in client.client.get.call_args[0][0]
+
+    # Missing/null count → 0.
+    empty = MagicMock(status_code=200)
+    empty.json.return_value = {}
+    client.client.get = MagicMock(return_value=empty)
+    assert client._fetch_dependent_count("pypi", "x", "1.0.0") == 0
+
+    # Non-200 → 0.
+    client.client.get = MagicMock(return_value=MagicMock(status_code=404))
+    assert client._fetch_dependent_count("pypi", "x", "1.0.0") == 0
+
+    # Network error → 0 (best-effort, never breaks scoring).
+    client.client.get = MagicMock(side_effect=ConnectionError("boom"))
+    assert client._fetch_dependent_count("pypi", "x", "1.0.0") == 0
 
 
 # --- DepsDevData dataclass ---
@@ -515,32 +542,26 @@ class TestGetPackageDataDepInfoException:
         self.client.client = MagicMock()
 
     def test_dep_info_fetch_exception(self):
-        """Exception fetching dep info still returns package data."""
+        """Exception fetching per-version dep info still returns package data."""
         pkg_resp = MagicMock()
         pkg_resp.status_code = 200
-        pkg_resp.json.return_value = {"dependentCount": 50}
-        pkg_resp.raise_for_status = MagicMock()
-
-        versions_resp = MagicMock()
-        versions_resp.status_code = 200
-        versions_resp.json.return_value = {
+        pkg_resp.json.return_value = {
+            "dependentCount": 50,
             "versions": [
                 {
                     "versionKey": {"version": "1.0.0"},
                     "publishedAt": "2023-01-01T00:00:00Z",
                     "isYanked": False,
                 },
-            ]
+            ],
         }
-
-        call_count = [0]
+        pkg_resp.raise_for_status = MagicMock()
 
         def side_effect(url):
-            call_count[0] += 1
-            if call_count[0] >= 3:  # dep info call
+            # The per-version detail call (carries a version in the path) fails;
+            # version metadata parsed from the package response must survive.
+            if "/versions/" in url:
                 raise ConnectionError("timeout")
-            if "/versions" in url:
-                return versions_resp
             return pkg_resp
 
         self.client.client.get = side_effect
@@ -548,3 +569,4 @@ class TestGetPackageDataDepInfoException:
         data = self.client.get_package_data("pkg", "pypi")
         assert data is not None
         assert data.dependency_info is None
+        assert data.latest_version == "1.0.0"

@@ -136,6 +136,15 @@ SKIP_HEADINGS = {
     "community",
     "awesome",
     "anti-features",
+    # Non-discriminative catch-all / meta sections: these headings express no
+    # nameable information need ("a relevant result is a package that ___" can't
+    # be completed), so no retriever can win and they only add measurement noise.
+    # Dropped by a score-blind rule (IR test-collection curation; Sanderson 2008),
+    # NOT because any system scored 0 on them. See A17_NPM_INVESTIGATION.md §6.
+    "miscellaneous",
+    "weird",
+    "mad science",
+    "cheatsheets",
 }
 
 HEADING_RE = re.compile(r"^(#{2,3})\s+(.+?)\s*$")

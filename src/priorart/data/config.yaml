@@ -105,3 +105,9 @@ retrieval:
   # applies to all ecosystems; a mapping (e.g. {default: 0.5, npm: 0.45}) sets
   # per-ecosystem floors once bench data justifies them.
   similarity_floor: 0.5
+  # Convex weight on the popularity prior blended into the fused ranking: among
+  # the packages dense+BM25 surface, the more-entrenched ones rank higher. A
+  # single float applies everywhere; a mapping (e.g. {default: 0.3, npm: 0.4})
+  # sets per-ecosystem weights once post-rebuild bench data justifies them.
+  # No-op on shards built before the metadata `popularity` field existed.
+  popularity_weight: 0.3

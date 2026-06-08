@@ -7,7 +7,8 @@ Pipeline:
 2. Embed ``"{name}: {description}"`` with BAAI/bge-small-en-v1.5 (fastembed).
 3. L2-normalize and int8-quantize (scale 127).
 4. Build a usearch HNSW index (``dtype="i8"``, cosine), save.
-5. Write ``metadata.jsonl`` sidecar with `{key, name, registry, description, github_url}`.
+5. Write ``metadata.jsonl`` sidecar with
+   `{key, name, registry, description, github_url, popularity, content_hash}`.
 6. SHA-256 each shard file; in assemble mode, stitch shard SHAs into ``manifest.json``.
 
 Sigstore signing of the manifest happens in CI (``sigstore sign``), not here —
@@ -243,6 +244,7 @@ def build_shard(ecosystem: str, out_dir: Path, top_n: int | None = None) -> dict
                         "registry": rec["registry"],
                         "description": rec["description"],
                         "github_url": rec.get("github_url"),
+                        "popularity": rec.get("popularity", 0),
                         "content_hash": h,
                     }
                 )

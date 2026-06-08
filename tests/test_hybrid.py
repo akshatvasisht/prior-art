@@ -184,3 +184,36 @@ def test_bm25_index_handles_doc_with_empty_text():
 def test_bm25_index_len_reports_corpus_size():
     idx = BM25Index(["a", "b", "c"], ["x", "y", "z"])
     assert len(idx) == 3
+
+
+def test_rrf_prior_weight_zero_is_noop():
+    """prior_weight=0 (or no priors) must leave the fusion untouched."""
+    rankings = [["a", "b", "c"], ["c", "b", "a"]]
+    base = reciprocal_rank_fusion(rankings)
+    assert reciprocal_rank_fusion(rankings, priors={"a": 1.0}, prior_weight=0.0) == base
+    assert reciprocal_rank_fusion(rankings, priors=None, prior_weight=0.9) == base
+
+
+def test_rrf_prior_reranks_toward_high_prior():
+    """A strong prior lifts a fusion-mediocre doc above the RRF leader."""
+    rankings = [["a", "b", "c"], ["a", "b", "c"]]  # 'a' leads RRF, 'c' trails
+    assert reciprocal_rank_fusion(rankings)[0] == "a"
+    boosted = reciprocal_rank_fusion(
+        rankings, priors={"c": 1.0, "a": 0.0, "b": 0.0}, prior_weight=0.9
+    )
+    assert boosted[0] == "c"  # popularity prior overcomes the small RRF lead
+
+
+def test_rrf_prior_ignores_docs_not_in_fusion():
+    """A prior for a doc neither retriever surfaced must not inject it."""
+    fused = reciprocal_rank_fusion([["a", "b"]], priors={"zzz": 1.0}, prior_weight=0.5)
+    assert "zzz" not in fused
+
+
+def test_rrf_prior_zero_span_orders_by_prior():
+    """When all RRF scores tie (zero span), the prior alone decides order."""
+    # two single-doc rankings → both at rank 0 → identical RRF score.
+    fused = reciprocal_rank_fusion(
+        [["a"], ["b"]], weights=[1.0, 1.0], priors={"a": 1.0, "b": 0.0}, prior_weight=0.5
+    )
+    assert fused == ["a", "b"]
