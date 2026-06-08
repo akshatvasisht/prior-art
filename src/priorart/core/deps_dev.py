@@ -60,6 +60,9 @@ class DepsDevClient:
     """Client for deps.dev API (Google Open Source Insights)."""
 
     BASE_URL = "https://api.deps.dev/v3"
+    # The reverse-dependency count lives only on the v3alpha version-scoped
+    # `:dependents` resource; the stable v3 package response omits it.
+    DEPENDENTS_BASE_URL = "https://api.deps.dev/v3alpha"
 
     def __init__(self, timeout: int = 30):
         self.client = httpx.Client(timeout=timeout)
@@ -113,16 +116,13 @@ class DepsDevClient:
         package_data = response.json()
 
         github_url = self._extract_github_url(package_data)
-        reverse_dep_count = package_data.get("dependentCount", 0)
 
-        # Secondary calls — optional enrichment, fail gracefully
-        versions: list[VersionInfo] = []
-        try:
-            versions_response = self.client.get(f"{package_url}/versions")
-            if versions_response.status_code == 200:
-                versions = self._parse_versions(versions_response.json())
-        except Exception:
-            pass
+        # deps.dev v3 embeds the full version history in the package response;
+        # there is no separate `/versions` list sub-resource (it 404s). Parse the
+        # versions inline rather than making a second, always-failing call — this
+        # is what populates first_release_date (and thus the age-confidence
+        # multiplier) and latest_version.
+        versions: list[VersionInfo] = self._parse_versions(package_data)
 
         first_release, latest_version = None, None
         major_versions_per_year, release_cv = None, None
@@ -138,6 +138,12 @@ class DepsDevClient:
                     versions, first_release
                 )
                 release_cv = self._calculate_release_cv(versions)
+
+        reverse_dep_count = 0
+        if latest_version:
+            reverse_dep_count = self._fetch_dependent_count(
+                deps_ecosystem, package_name, latest_version
+            )
 
         dependency_info = None
         if latest_version:
@@ -161,6 +167,26 @@ class DepsDevClient:
             major_versions_per_year=major_versions_per_year,
             release_cv=release_cv,
         )
+
+    def _fetch_dependent_count(self, ecosystem: str, package_name: str, version: str) -> int:
+        """Reverse-dependency count for a version via deps.dev v3alpha ``:dependents``.
+
+        The stable v3 package response carries no dependent count, so adoption's
+        reverse-dependency signal needs this version-scoped alpha resource.
+        Best-effort: any failure (network, non-200, malformed body) yields 0 so
+        a missing count never breaks scoring.
+        """
+        url = (
+            f"{self.DEPENDENTS_BASE_URL}/systems/{ecosystem}/packages/"
+            f"{quote(package_name, safe='')}/versions/{quote(version, safe='')}:dependents"
+        )
+        try:
+            resp = self.client.get(url)
+            if resp.status_code == 200:
+                return int(resp.json().get("dependentCount", 0) or 0)
+        except Exception:
+            pass
+        return 0
 
     def _extract_github_url(self, package_data: dict) -> str | None:
         """Extract GitHub URL from deps.dev package data."""
