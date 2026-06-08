@@ -12,7 +12,8 @@ Single-source (snapshot) design:
 
 Each fetcher yields dicts with::
 
-    {"name": str, "registry": str, "description": str, "github_url": str | None}
+    {"name": str, "registry": str, "description": str,
+     "github_url": str | None, "popularity": int}
 
 The driver (``build.py``) de-duplicates by ``(name, registry)``, assigns
 integer keys, and writes a combined ``metadata.jsonl`` sidecar.
@@ -140,6 +141,11 @@ def _iter_popular_snapshot(ecosystem: str, top_n: int) -> Iterator[dict]:
             "registry": registry,
             "description": desc,
             "github_url": row.get("repository_url") or None,
+            # Raw entrenchment signal behind the ranking (downloads for npm,
+            # dependent-package count elsewhere). Carried into the shard
+            # metadata so retrieval can apply a popularity prior. Scales differ
+            # across ecosystems, so the consumer log-normalizes per shard.
+            "popularity": row.get(sort_key) or 0,
         }
 
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -42,23 +43,42 @@ EMBED_DIM = 384
 SIMILARITY_FLOOR = 0.5
 
 
-def _similarity_floor(ecosystem: str) -> float:
-    """Resolve the similarity floor for ``ecosystem`` from config.
+# Default convex weight on the popularity prior blended into the fused ranking
+# (see hybrid.reciprocal_rank_fusion). Overridable per-ecosystem via config.yaml
+# `retrieval.popularity_weight`. Dormant on shards built before the popularity
+# field was added to metadata.jsonl — no data means an all-zero prior, which is
+# order-preserving, so this is a safe no-op until the next index rebuild.
+POPULARITY_WEIGHT = 0.3
 
-    ``retrieval.similarity_floor`` may be a single float (applies everywhere)
-    or a mapping with per-ecosystem overrides plus a ``default`` key. Falls
-    back to ``SIMILARITY_FLOOR`` on any miss or error.
-    """
+
+def _per_ecosystem_setting(key: str, ecosystem: str, default: float) -> float:
+    """Resolve a ``retrieval.<key>`` value that may be a single float or a
+    per-ecosystem mapping with a ``default`` key. Falls back to ``default`` on
+    any miss or error (including a non-numeric configured value)."""
     try:
-        configured = load_config()["retrieval"].get("similarity_floor", SIMILARITY_FLOOR)
+        configured = load_config()["retrieval"].get(key, default)
         if isinstance(configured, dict):
-            floor = configured.get(ecosystem)
-            if floor is None:
-                floor = configured.get("default", SIMILARITY_FLOOR)
-            return float(floor)
+            value = configured.get(ecosystem)
+            if value is None:
+                value = configured.get("default", default)
+            return float(value)
         return float(configured)
     except Exception:
-        return SIMILARITY_FLOOR
+        return default
+
+
+def _similarity_floor(ecosystem: str) -> float:
+    """Resolve the similarity floor for ``ecosystem``. ``retrieval.similarity_floor``
+    may be a single float or a per-ecosystem mapping; falls back to
+    ``SIMILARITY_FLOOR``."""
+    return _per_ecosystem_setting("similarity_floor", ecosystem, SIMILARITY_FLOOR)
+
+
+def _popularity_weight(ecosystem: str) -> float:
+    """Resolve the popularity-prior weight for ``ecosystem``.
+    ``retrieval.popularity_weight`` may be a single float or a per-ecosystem
+    mapping; falls back to ``POPULARITY_WEIGHT``."""
+    return _per_ecosystem_setting("popularity_weight", ecosystem, POPULARITY_WEIGHT)
 
 
 # how many candidates to ask each retriever (dense, BM25) for before RRF
@@ -167,6 +187,12 @@ class Retriever:
         # Name → metadata record, for hydrating BM25 hits (which return only
         # names) into RetrievalHit objects without re-scanning the sidecar.
         self._name_to_record: dict[str, dict[str, Any]] | None = None
+        # Name → log-normalized popularity in [0, 1], computed once from the
+        # shard's ``popularity`` field. ``None`` once computed means the shard
+        # predates the field. The flag distinguishes "not yet computed" from
+        # the legitimate ``None`` result.
+        self._popularity: dict[str, float] | None = None
+        self._popularity_computed = False
 
     def _ensure_loaded(self) -> None:
         if self._index is not None:
@@ -197,6 +223,31 @@ class Retriever:
                 descs.append(rec.get("description", "") or "")
             self._bm25 = BM25Index(names, descs)
         return self._bm25
+
+    def popularity_scores(self) -> dict[str, float] | None:
+        """Per-name log-normalized popularity in ``[0, 1]``, memoized.
+
+        Returns ``None`` when the shard carries no usable ``popularity`` field
+        (shards built before the field was added) so callers can skip the
+        prior entirely rather than blend an all-zero map.
+        """
+        if self._popularity_computed:
+            return self._popularity
+        self._ensure_loaded()
+        assert self._metadata is not None
+        raw: dict[str, float] = {}
+        for rec in self._metadata.values():
+            name = rec.get("name")
+            pop = rec.get("popularity")
+            if name and isinstance(pop, (int, float)) and not isinstance(pop, bool) and pop > 0:
+                raw[name] = float(pop)
+        if raw:
+            denom = math.log1p(max(raw.values()))
+            self._popularity = {name: math.log1p(pop) / denom for name, pop in raw.items()}
+        else:
+            self._popularity = None
+        self._popularity_computed = True
+        return self._popularity
 
     def search_dense(self, query: str, k: int = 20) -> list[RetrievalHit]:
         """Return up to ``k`` dense hits ranked by cosine similarity."""
@@ -345,9 +396,15 @@ def _fuse_and_hydrate(
     if not bm25_names:
         return [_hit_to_candidate(h) for h in dense_hits[:max_results]]
 
+    # Blend a popularity prior into the fusion so that, among the packages the
+    # two retrievers surface, the more-entrenched ones rank higher — closing the
+    # gap where pure cosine/BM25 favors obscure name-matches over the popular
+    # library a user actually wants. No-op on shards without the field.
     fused = reciprocal_rank_fusion(
         [dense_ranking, bm25_names],
         weights=[DENSE_WEIGHT, BM25_WEIGHT],
+        priors=retriever.popularity_scores(),
+        prior_weight=_popularity_weight(retriever.ecosystem),
     )
 
     # RRF deduplicates by construction (it's a dict-keyed sum), so iterating

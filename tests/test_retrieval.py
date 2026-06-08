@@ -16,6 +16,7 @@ from priorart.core.retrieval import (
     _fuse_and_hydrate,
     _hit_to_candidate,
     _load_metadata,
+    _popularity_weight,
     _registry_fallback,
     _retriever_for,
     _similarity_floor,
@@ -222,6 +223,7 @@ def test_retrieve_candidates_uses_hybrid_path(mock_get_retriever):
     1 — the BM25 contribution closes the gap once dense's lead is small.
     """
     retriever = MagicMock()
+    retriever.popularity_scores.return_value = None  # pre-popularity shard
     # 'httplib2' wins dense (literal bias); 'requests' is buried at #5.
     retriever.search_dense.return_value = [
         RetrievalHit("httplib2", "pypi", "HTTP/2", None, 0.82),
@@ -287,6 +289,7 @@ def test_retrieve_candidates_hydrates_bm25_only_hit(mock_get_retriever):
     ]
     retriever.search_bm25.return_value = ["requests", "httplib2"]
     # 'requests' is BM25-only; hydrate must produce a record for it.
+    retriever.popularity_scores.return_value = None  # pre-popularity shard
     retriever.hydrate.return_value = RetrievalHit("requests", "pypi", "HTTP for Humans", None, 0.0)
     mock_get_retriever.return_value = retriever
 
@@ -304,6 +307,7 @@ def test_retrieve_candidates_skips_unhydrated_bm25_hit(mock_get_retriever):
     retriever.search_dense.return_value = [
         RetrievalHit("httpx", "pypi", "HTTP", None, 0.82),
     ]
+    retriever.popularity_scores.return_value = None  # pre-popularity shard
     retriever.search_bm25.return_value = ["ghost-pkg", "httpx"]
     retriever.hydrate.return_value = None
     mock_get_retriever.return_value = retriever
@@ -611,6 +615,7 @@ def test_retrieve_candidates_returns_requests_for_http_clients_python(mock_get_r
     `requests` must be in the top-10 (the regression bar).
     """
     retriever = MagicMock()
+    retriever.popularity_scores.return_value = None  # pre-popularity shard
     # Reproduces the observed (pre-hybrid) dense top-10 for 'http clients':
     # name-keyword matchers dominate, `requests` is far down or missing.
     retriever.search_dense.return_value = [
@@ -680,3 +685,63 @@ def test_embedder_is_lru_cached():
         _embedder()
     assert fake_cls.call_count == 1
     _embedder.cache_clear()
+
+
+def test_popularity_weight_reads_config():
+    # Default from config.yaml; exercises the per-ecosystem resolver.
+    assert _popularity_weight("python") == 0.3
+
+
+def _retriever_with_metadata(metadata):
+    r = Retriever("python")
+    r._ensure_loaded = lambda: None  # type: ignore[method-assign]
+    r._metadata = metadata
+    return r
+
+
+def test_popularity_scores_log_normalizes_and_filters():
+    r = _retriever_with_metadata(
+        {
+            0: {"name": "popular", "popularity": 1_000_000},
+            1: {"name": "mid", "popularity": 1_000},
+            2: {"name": "obscure", "popularity": 1},
+            3: {"name": "nopop"},  # missing field → excluded
+            4: {"name": "zero", "popularity": 0},  # non-positive → excluded
+            5: {"name": "booly", "popularity": True},  # bool → excluded
+            6: {"popularity": 50},  # missing name → excluded
+        }
+    )
+    scores = r.popularity_scores()
+    assert scores is not None
+    assert scores["popular"] == 1.0  # max maps to 1.0
+    assert 0 < scores["obscure"] < scores["mid"] < scores["popular"]
+    assert {"nopop", "zero", "booly"}.isdisjoint(scores)
+    # memoized — same object on the second call
+    assert r.popularity_scores() is scores
+
+
+def test_popularity_scores_none_when_field_absent():
+    r = _retriever_with_metadata({0: {"name": "a"}, 1: {"name": "b", "popularity": 0}})
+    assert r.popularity_scores() is None
+    assert r.popularity_scores() is None  # memoized None
+
+
+@patch("priorart.core.retrieval._popularity_weight", return_value=0.9)
+@patch("priorart.core.retrieval._retriever_for")
+def test_retrieve_candidates_popularity_prior_lifts_popular(mock_get_retriever, _mock_weight):
+    """With the prior wired in, a popular package buried by dense/BM25 surfaces."""
+    retriever = MagicMock()
+    retriever.ecosystem = "python"
+    retriever.search_dense.return_value = [
+        RetrievalHit("obscure-a", "pypi", "x", None, 0.82),
+        RetrievalHit("obscure-b", "pypi", "y", None, 0.80),
+        RetrievalHit("popular", "pypi", "z", None, 0.78),
+    ]
+    retriever.search_bm25.return_value = ["obscure-a", "obscure-b", "popular"]
+    retriever.hydrate.return_value = None
+    retriever.popularity_scores.return_value = {"popular": 1.0, "obscure-a": 0.0, "obscure-b": 0.0}
+    mock_get_retriever.return_value = retriever
+
+    results = retrieve_candidates("query", "python", max_results=3)
+
+    assert results[0].name == "popular"  # prior overcame the fusion ordering
