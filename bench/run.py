@@ -37,7 +37,14 @@ from typing import Any
 from priorart.core.registry import PackageCandidate, get_registry_client
 from priorart.core.retrieval import retrieve_candidates
 
-from .metrics import aggregate, ndcg_at_k, recall_at_k, reciprocal_rank
+from .metrics import (
+    aggregate,
+    condensed_ndcg_at_k,
+    ndcg_at_k,
+    recall_at_k,
+    reciprocal_rank,
+    success_at_k,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +109,10 @@ def evaluate(gold: list[dict], k: int, baselines: list[str]) -> dict[str, dict[s
 
             results[baseline].append(
                 {
+                    # Incompleteness-robust headline metrics (positives-only,
+                    # single-pool gold) lead; raw nDCG@k stays as a diagnostic.
+                    f"cnd_ndcg@{k}": condensed_ndcg_at_k(relevant, ranked, k),
+                    "success@5": success_at_k(relevant, ranked, 5),
                     f"ndcg@{k}": ndcg_at_k(relevant, ranked, k),
                     f"recall@{k}": recall_at_k(relevant, ranked, k),
                     "mrr": reciprocal_rank(relevant, ranked),

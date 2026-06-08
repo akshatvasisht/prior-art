@@ -1,6 +1,13 @@
 """Tests for the benchmark metrics module."""
 
-from bench.metrics import aggregate, ndcg_at_k, recall_at_k, reciprocal_rank
+from bench.metrics import (
+    aggregate,
+    condensed_ndcg_at_k,
+    ndcg_at_k,
+    recall_at_k,
+    reciprocal_rank,
+    success_at_k,
+)
 
 
 def test_recall_at_k():
@@ -58,6 +65,26 @@ def test_metrics_ndcg_graded_relevance():
     graded = ndcg_at_k({"high": 2, "low": 1}, ["high", "low"], k=3)
     swapped = ndcg_at_k({"high": 2, "low": 1}, ["low", "high"], k=3)
     assert graded > swapped
+
+
+def test_success_at_k():
+    assert success_at_k({"a": 1}, ["x", "a", "y"], k=3) == 1.0
+    assert success_at_k({"a": 1}, ["x", "y", "z"], k=3) == 0.0
+    # The hit must be within k.
+    assert success_at_k({"a": 1}, ["x", "y", "a"], k=2) == 0.0
+    assert success_at_k({}, ["a"], k=3) == 0.0
+
+
+def test_condensed_ndcg_ignores_unjudged_docs():
+    """A relevant doc buried under UNJUDGED docs scores 0 on raw nDCG@k but high
+    on condensed nDCG — the unjudged docs are dropped before scoring."""
+    relevant = {"gold": 1}
+    # 'gold' sits at rank 4, behind three unjudged (not in relevant) docs.
+    ranked = ["unjudged1", "unjudged2", "unjudged3", "gold"]
+    assert ndcg_at_k(relevant, ranked, k=3) == 0.0  # gold outside top-3
+    assert condensed_ndcg_at_k(relevant, ranked, k=3) == 1.0  # condensed -> gold first
+    # No relevant doc retrieved at all stays 0 under both.
+    assert condensed_ndcg_at_k(relevant, ["a", "b"], k=3) == 0.0
 
 
 def test_aggregate_means_across_queries():
