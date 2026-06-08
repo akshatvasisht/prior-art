@@ -54,12 +54,37 @@ result = find_alternatives(
                 "versioning": 80,
                 "activity_regularity": 75,
                 "dependency_health": 90
+            },
+            "data_quality": {  # provenance — which signals are real vs defaulted
+                "signals_fetched": ["dep_health", "downloads", "regularity", "repo", "version"],
+                "signals_missing": ["mttr"],
+                "data_as_of": "2026-06-07T05:36:48+00:00"
             }
         }
     ],
     "service_note": null
 }
 ```
+
+**The `data_quality` block** is attached to every package so callers can tell a
+genuine score from one propped up by neutral defaults (e.g. when GitHub or
+deps.dev was unavailable). Signal groups:
+
+| Group | Source | What it backs |
+|-------|--------|---------------|
+| `repo` | GitHub | stars/forks → adoption |
+| `mttr` | GitHub | mean time-to-resolve → reliability |
+| `regularity` | GitHub | commit-cadence CV → activity |
+| `version` | deps.dev | latest release recency → versioning |
+| `dep_health` | deps.dev | dependency graph → dependency health |
+| `downloads` | pypistats/registry | weekly downloads → adoption |
+
+- `signals_fetched` / `signals_missing` — groups with real data vs. those that
+  fell back to a neutral 0.5. A group is `missing` when its source was
+  unreachable or returned nothing (e.g. no `GITHUB_TOKEN` → all three GitHub
+  groups missing).
+- `data_as_of` — the oldest timestamp behind any fetched group (ISO-8601 UTC),
+  so a partially-stale result is visible rather than silently trusted.
 
 **Error Responses:**
 
