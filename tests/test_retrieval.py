@@ -688,8 +688,10 @@ def test_embedder_is_lru_cached():
 
 
 def test_popularity_weight_reads_config():
-    # Default from config.yaml; exercises the per-ecosystem resolver.
-    assert _popularity_weight("python") == 0.3
+    # Per-ecosystem mapping from config.yaml; exercises the resolver's override
+    # and default branches against the calibrated values.
+    assert _popularity_weight("python") == 0.7  # calibrated override
+    assert _popularity_weight("maven") == 0.5  # falls to default
 
 
 def _retriever_with_metadata(metadata):
