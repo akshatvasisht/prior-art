@@ -106,8 +106,14 @@ retrieval:
   # per-ecosystem floors once bench data justifies them.
   similarity_floor: 0.5
   # Convex weight on the popularity prior blended into the fused ranking: among
-  # the packages dense+BM25 surface, the more-entrenched ones rank higher. A
-  # single float applies everywhere; a mapping (e.g. {default: 0.3, npm: 0.4})
-  # sets per-ecosystem weights once post-rebuild bench data justifies them.
-  # No-op on shards built before the metadata `popularity` field existed.
-  popularity_weight: 0.3
+  # the packages dense+BM25 surface, the more-entrenched ones rank higher.
+  # Per-ecosystem values calibrated against the bench (condensed nDCG@10 +
+  # Success@5): python/npm/crates peak at 0.7, go regresses past 0.5. With the
+  # prior at these weights, npm semantic retrieval beats the keyword baseline.
+  # maven/nuget have no bench gold yet, so they take the moderate default.
+  popularity_weight:
+    default: 0.5
+    python: 0.7
+    npm: 0.7
+    crates: 0.7
+    go: 0.5
