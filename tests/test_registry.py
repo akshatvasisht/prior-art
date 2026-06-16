@@ -130,6 +130,15 @@ def test_get_registry_client():
     assert isinstance(get_registry_client("fsharp"), NuGetClient)
 
 
+def test_registry_client_sends_contact_user_agent():
+    """Every registry call must carry a contact User-Agent — crates.io (and
+    good-citizen policy) 403s bare requests."""
+    with RegistryClient() as client:
+        ua = client.client.headers.get("user-agent", "")
+    assert "priorart" in ua
+    assert "github.com/akshatvasisht/prior-art" in ua
+
+
 def test_get_registry_client_unknown_language():
     """Test that unknown language raises error."""
     with pytest.raises(ValueError, match="Unsupported language"):

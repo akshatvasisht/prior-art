@@ -14,6 +14,11 @@ from .utils import validate_github_url
 
 logger = logging.getLogger(__name__)
 
+# crates.io (and good-citizen registry policy) rejects requests without a
+# User-Agent that identifies the client and gives a contact — bare requests get
+# HTTP 403. Sent on every registry call.
+USER_AGENT = "priorart package-discovery (https://github.com/akshatvasisht/prior-art)"
+
 
 @dataclass
 class PackageCandidate:
@@ -43,7 +48,7 @@ class RegistryClient:
     """Base class for registry API clients."""
 
     def __init__(self, timeout: int = 30):
-        self.client = httpx.Client(timeout=timeout)
+        self.client = httpx.Client(timeout=timeout, headers={"User-Agent": USER_AGENT})
         self.timeout = timeout
 
     def close(self) -> None:
