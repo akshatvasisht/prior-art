@@ -141,7 +141,7 @@ def test_hf_download_with_retry_retries_then_succeeds(monkeypatch: pytest.Monkey
 
 
 def test_hf_download_with_retry_raises_after_exhaustion(monkeypatch: pytest.MonkeyPatch):
-    """Default attempts is the secondary-guard value of 3; it raises when exhausted."""
+    """Default attempts is the secondary-guard value of 6; it raises when exhausted."""
     import huggingface_hub
 
     from scripts.index_build import fetch as fetch_mod
@@ -158,4 +158,4 @@ def test_hf_download_with_retry_raises_after_exhaustion(monkeypatch: pytest.Monk
 
     with pytest.raises(RuntimeError):
         fetch_mod._hf_download_with_retry(repo_id="r", filename="f", repo_type="dataset")
-    assert calls["n"] == 3
+    assert calls["n"] == 6
