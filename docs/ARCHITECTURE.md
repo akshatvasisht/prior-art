@@ -55,6 +55,7 @@ src/priorart/
    ├─ Embed query with BAAI/bge-small-en-v1.5
    ├─ L2-normalize and int8-quantize
    ├─ usearch HNSW cosine query against ecosystem shard
+   ├─ Blend a log-normalized popularity prior into the fused ranking (weight per ecosystem)
    └─ Fall back to live registry search when top similarity < 0.5
 3. Signal collection
    ├─ Registry metadata (downloads, version, license)

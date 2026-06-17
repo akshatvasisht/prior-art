@@ -231,5 +231,5 @@ Without `GITHUB_TOKEN`, GitHub signals are skipped and packages score with regis
 ## Rate Limits
 
 - **GitHub API:** 5,000 requests/hour with authentication. Registry-first architecture minimizes usage.
-- **Registry APIs (PyPI, npm, crates.io, pkg.go.dev, Maven Central, NuGet):** No authentication required; generous public quotas.
+- **Registry APIs (PyPI, npm, crates.io, pkg.go.dev, Maven Central, NuGet):** No authentication required; generous public quotas. Requests send a contact `User-Agent` (crates.io rejects bare requests with HTTP 403).
 - **ecosyste.ms API** (used for Maven/NuGet `get_package_info` enrichment): 5,000 requests/hour anonymous, more than enough for interactive use.

@@ -144,6 +144,4 @@ Top-level dimension weights and recommendation thresholds are in `data/config.ya
 
 **`days_since_compatible_release` is populated from deps.dev** — `_fetch_fresh_signals` in `core/find_alternatives.py` resolves the publish date of `latest_version` via `_latest_stable_published_at(deps_data)` and sets the signal. Falls back to the 365-day default only when the publish date is missing.
 
-**`version_compatible` is still never populated** — `is_current_partial_score` in config remains effectively dead. Requires Python version comparison logic to implement.
-
 **Semantic index covers Go** — the old hardcoded `pkg.go.dev` package dictionary was superseded by the HNSW shard built from the ecosyste.ms snapshot. The registry client still exists as a fallback for `--lite` mode but is no longer the primary discovery path.

@@ -29,7 +29,7 @@ Noise-floor thresholds for registry metrics follow [Koch et al. (MADWeb 2024)](h
 
 ## Pipeline
 
-1. **Semantic retrieval.** Task description is embedded with `BAAI/bge-small-en-v1.5` and queried against a per-ecosystem HNSW index. Falls back to live registry search when top similarity < 0.5.
+1. **Semantic retrieval.** Task description is embedded with `BAAI/bge-small-en-v1.5` and queried against a per-ecosystem HNSW index; the fused ranking blends in a log-normalized popularity prior (weight configurable per ecosystem). Falls back to live registry search when top similarity < 0.5.
 2. **Signal collection.** Registry metadata, GitHub repository metrics, deps.dev graphs, and OpenSSF Scorecard results; cached in SQLite with per-signal-group freshness windows.
 3. **Scoring.** Weighted composite across reliability, adoption, versioning, activity regularity, and dependency health, with an age-based confidence multiplier for packages under three years.
 4. **Recommendation.** `use_existing` (≥ 75), `evaluate` (50–74), or `build` (< 50).
