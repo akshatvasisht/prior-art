@@ -19,6 +19,10 @@ from priorart.core.retrieval import (
     _popularity_weight,
     _registry_fallback,
     _relevance_z_floor,
+    _rerank,
+    _reranker,
+    _reranker_model,
+    _reranker_weight,
     _retriever_for,
     _should_fall_back,
     _similarity_floor,
@@ -153,11 +157,138 @@ def test_should_fall_back_zscore_zero_variance_uses_absolute(monkeypatch):
     assert _should_fall_back(_hits(0.4, 0.4, 0.4, 0.4, 0.4), "python") is True
 
 
+# --- _reranker_model / _rerank ---
+
+
+def test_reranker_model_none_by_default():
+    # config.yaml ships reranker_model: null → reranking disabled.
+    assert _reranker_model() is None
+
+
+def test_reranker_model_reads_config(monkeypatch):
+    monkeypatch.setattr(retrieval, "load_config", lambda: {"retrieval": {"reranker_model": "X/m"}})
+    assert _reranker_model() == "X/m"
+
+
+def test_reranker_model_error_is_none(monkeypatch):
+    def _boom():
+        raise RuntimeError("no config")
+
+    monkeypatch.setattr(retrieval, "load_config", _boom)
+    assert _reranker_model() is None
+
+
+def test_reranker_weight_reads_config():
+    # config.yaml ships reranker_weight: 0.5.
+    assert _reranker_weight() == 0.5
+
+
+def test_reranker_weight_override_and_fallback(monkeypatch):
+    monkeypatch.setattr(retrieval, "load_config", lambda: {"retrieval": {"reranker_weight": 0.8}})
+    assert _reranker_weight() == 0.8
+
+    def _boom():
+        raise RuntimeError("no config")
+
+    monkeypatch.setattr(retrieval, "load_config", _boom)
+    assert _reranker_weight() == retrieval.RERANK_WEIGHT  # fallback
+
+
+def test_rerank_off_returns_empty():
+    # No reranker_model configured → no-op, dense ranking untouched.
+    assert _rerank("q", _hits(0.8, 0.7)) == []
+
+
+def test_rerank_builds_docs_handling_empty_description(monkeypatch):
+    monkeypatch.setattr(retrieval, "_reranker_model", lambda: "fake-model")
+    captured = {}
+    fake = MagicMock()
+
+    def _rr(query, docs):
+        captured["docs"] = list(docs)
+        return [0.0] * len(docs)
+
+    fake.rerank.side_effect = _rr
+    monkeypatch.setattr(retrieval, "_reranker", lambda name: fake)
+    hits = [
+        RetrievalHit("requests", "pypi", "HTTP for humans", None, 0.8),
+        RetrievalHit("bare", "pypi", "", None, 0.7),  # empty description
+    ]
+    _rerank("http", hits)
+    # described → "name. desc"; empty → bare name (no dangling period).
+    assert captured["docs"] == ["requests. HTTP for humans", "bare"]
+
+
+def test_rerank_empty_hits_returns_empty(monkeypatch):
+    monkeypatch.setattr(retrieval, "_reranker_model", lambda: "fake-model")
+    assert _rerank("q", []) == []
+
+
+def test_rerank_reorders_by_cross_encoder_score(monkeypatch):
+    monkeypatch.setattr(retrieval, "_reranker_model", lambda: "fake-model")
+    fake = MagicMock()
+    # scores for [p0, p1, p2] → descending order is p1, p2, p0.
+    fake.rerank.return_value = [0.1, 0.9, 0.5]
+    monkeypatch.setattr(retrieval, "_reranker", lambda name: fake)
+    assert _rerank("q", _hits(0.8, 0.7, 0.6)) == ["p1", "p2", "p0"]
+
+
+def test_rerank_failsoft_on_error(monkeypatch):
+    monkeypatch.setattr(retrieval, "_reranker_model", lambda: "fake-model")
+
+    def _boom(name):
+        raise RuntimeError("model download failed")
+
+    monkeypatch.setattr(retrieval, "_reranker", _boom)
+    assert _rerank("q", _hits(0.8, 0.7)) == []
+
+
+def test_reranker_is_lru_cached():
+    _reranker.cache_clear()
+    fake_cls = MagicMock()
+    fake_module = MagicMock()
+    fake_module.TextCrossEncoder = fake_cls
+    with patch.dict("sys.modules", {"fastembed.rerank.cross_encoder": fake_module}):
+        _reranker("m1")
+        _reranker("m1")
+    assert fake_cls.call_count == 1
+    _reranker.cache_clear()
+
+
+def test_fuse_and_hydrate_includes_reranker_lane(monkeypatch):
+    # bm25 empty but a reranker lane is present → fusion runs (not the
+    # dense-only fast path), and both dense names survive.
+    retriever = MagicMock()
+    retriever.popularity_scores.return_value = None
+    monkeypatch.setattr(retrieval, "_rerank", lambda q, hits: ["p1", "p0"])
+    out = _fuse_and_hydrate(retriever, "q", _hits(0.8, 0.7), [], 2)
+    assert {c.name for c in out} == {"p0", "p1"}
+
+
+@patch("priorart.core.retrieval._retriever_for")
+def test_retrieve_candidates_invokes_reranker_lane(mock_get_retriever, monkeypatch):
+    retriever = MagicMock()
+    retriever.popularity_scores.return_value = None
+    retriever.search_dense.return_value = _hits(0.8, 0.78)
+    retriever.search_bm25.return_value = []
+    mock_get_retriever.return_value = retriever
+    seen = {}
+
+    def fake_rerank(query, hits):
+        seen["query"] = query
+        return [h.name for h in reversed(hits)]
+
+    monkeypatch.setattr(retrieval, "_rerank", fake_rerank)
+    results = retrieve_candidates("http client", "python", max_results=2)
+    assert seen["query"] == "http client"  # lane wired with the query
+    assert {r.name for r in results} == {"p0", "p1"}
+
+
 def test_fuse_and_hydrate_returns_empty_for_nonpositive_max_results():
     """max_results <= 0 yields no candidates — the append-before-check loop
     previously returned one item for max_results=0."""
-    assert _fuse_and_hydrate(MagicMock(), [], ["x"], 0) == []
-    assert _fuse_and_hydrate(MagicMock(), [], ["x"], -1) == []
+    assert _fuse_and_hydrate(MagicMock(), "q", [], ["x"], 0) == []
+    assert _fuse_and_hydrate(MagicMock(), "q", [], ["x"], -1) == []
 
 
 def test_ecosystem_for_maps_common_languages():

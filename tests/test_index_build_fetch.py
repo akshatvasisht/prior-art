@@ -159,3 +159,42 @@ def test_hf_download_with_retry_raises_after_exhaustion(monkeypatch: pytest.Monk
     with pytest.raises(RuntimeError):
         fetch_mod._hf_download_with_retry(repo_id="r", filename="f", repo_type="dataset")
     assert calls["n"] == 6
+
+
+# --- _select_snapshot_rows (long-tail coverage) ---
+
+
+def test_select_snapshot_rows_top_n_only():
+    from scripts.index_build.fetch import _select_snapshot_rows
+
+    rows = [{"p": 5}, {"p": 1}, {"p": 9}, {"p": 3}]
+    out = _select_snapshot_rows(rows, "p", top_n=2)
+    assert [r["p"] for r in out] == [9, 5]  # top 2 by p desc, no long tail
+
+
+def test_select_snapshot_rows_long_tail_floor():
+    from scripts.index_build.fetch import _select_snapshot_rows
+
+    rows = [{"p": 100}, {"p": 80}, {"p": 60}, {"p": 40}, {"p": 10}]
+    # top_n=2 head (100, 80) + long tail at/above 50 (60); 40 and 10 dropped.
+    out = _select_snapshot_rows(rows, "p", top_n=2, long_tail_floor=50)
+    assert [r["p"] for r in out] == [100, 80, 60]
+
+
+def test_select_snapshot_rows_long_tail_capped():
+    from scripts.index_build.fetch import _LONG_TAIL_CAP_MULTIPLIER, _select_snapshot_rows
+
+    # All rows clear the floor, but selection is capped at top_n * multiplier.
+    rows = [{"p": 100 - i} for i in range(50)]
+    out = _select_snapshot_rows(rows, "p", top_n=3, long_tail_floor=0)
+    assert len(out) == 3 * _LONG_TAIL_CAP_MULTIPLIER
+
+
+def test_select_snapshot_rows_missing_sort_key_treated_as_zero():
+    from scripts.index_build.fetch import _select_snapshot_rows
+
+    rows = [{"p": 5}, {}, {"p": 9}]  # one row missing the sort key
+    out = _select_snapshot_rows(rows, "p", top_n=3, long_tail_floor=1)
+    # 9 and 5 clear the floor; the keyless row (treated as 0) is below it but
+    # still inside the top_n head, so it survives.
+    assert [r.get("p", 0) for r in out] == [9, 5, 0]

@@ -114,6 +114,17 @@ retrieval:
   # Off by default (null) pending a bench calibration pass; the absolute floor
   # still backstops empty/tiny/zero-variance pools. See OPEN_ISSUES A20/A22.
   relevance_z_floor: null
+  # Optional cross-encoder reranker. Null/unset = off (dense + BM25 fusion only).
+  # When set to a fastembed-supported cross-encoder (e.g.
+  # "Xenova/ms-marco-MiniLM-L-6-v2", 80 MB), the dense pool is reranked by direct
+  # (query, description) relevance and fused in as an extra lane (RERANK_WEIGHT).
+  # Highest-ROI top-5 quality lever, but adds a model download + per-query CPU
+  # cost; off pending a bench calibration pass. Fail-soft: a load/inference error
+  # degrades to dense+BM25. See OPEN_ISSUES A22.
+  reranker_model: null
+  # Weight of the reranker lane in RRF fusion (only used when reranker_model is
+  # set). Pending bench calibration; tune here rather than in code.
+  reranker_weight: 0.5
   # Convex weight on the popularity prior blended into the fused ranking: among
   # the packages dense+BM25 surface, the more-entrenched ones rank higher.
   # Per-ecosystem values calibrated against the bench (condensed nDCG@10 +

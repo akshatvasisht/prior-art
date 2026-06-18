@@ -146,6 +146,51 @@ HYBRID_POOL = 50
 DENSE_WEIGHT = 0.7
 BM25_WEIGHT = 0.3
 
+# Fallback weight of the optional cross-encoder reranker lane in RRF fusion, used
+# only when `retrieval.reranker_model` is configured (off by default). A
+# cross-encoder scores (query, description) pairs directly, so it's the strongest
+# relevance signal when present. The value wants bench calibration before
+# enabling, so it lives in config (`retrieval.reranker_weight`); this constant is
+# the fallback when unset.
+RERANK_WEIGHT = 0.5
+
+
+def _reranker_weight() -> float:
+    """Resolve the reranker lane weight (`retrieval.reranker_weight`).
+
+    A single float; falls back to ``RERANK_WEIGHT`` on any miss or error. Lives in
+    config because it's a pending-calibration value tuned in the bench loop.
+    """
+    try:
+        return float(load_config()["retrieval"].get("reranker_weight", RERANK_WEIGHT))
+    except Exception:
+        return RERANK_WEIGHT
+
+
+def _reranker_model() -> str | None:
+    """Resolve the optional cross-encoder reranker model name.
+
+    ``retrieval.reranker_model`` is null/unset by default (no reranking). When
+    set to a fastembed-supported cross-encoder (e.g.
+    ``Xenova/ms-marco-MiniLM-L-6-v2``), the fused ranking gains a reranker lane.
+    Returns ``None`` on any miss or error so a bad value disables the lane rather
+    than breaking retrieval (consistent with the other retrieval-config helpers).
+    """
+    try:
+        model = load_config()["retrieval"].get("reranker_model")
+        return str(model) if model else None
+    except Exception:
+        return None
+
+
+@lru_cache(maxsize=2)
+def _reranker(model_name: str):
+    """Lazy-load a fastembed cross-encoder once per process per model."""
+    from fastembed.rerank.cross_encoder import TextCrossEncoder  # type: ignore
+
+    return TextCrossEncoder(model_name=model_name)
+
+
 _LANGUAGE_TO_ECOSYSTEM = {
     "python": "python",
     "javascript": "npm",
@@ -356,6 +401,28 @@ class Retriever:
         )
 
 
+def _rerank(query: str, hits: list[RetrievalHit]) -> list[str]:
+    """Reorder ``hits`` by cross-encoder relevance to ``query``.
+
+    Returns hit names in descending relevance, for fusion as an extra lane.
+    No-op (returns ``[]``) when no reranker is configured (the default), so the
+    dense+BM25 ranking is unchanged. Best-effort: any failure (model download,
+    inference) is swallowed so reranking degrades rather than breaking the query.
+    """
+    model_name = _reranker_model()
+    if not model_name or not hits:
+        return []
+    try:
+        reranker = _reranker(model_name)
+        docs = [f"{h.name}. {h.description}".strip() if h.description else h.name for h in hits]
+        scores = list(reranker.rerank(query, docs))
+        ranked = sorted(zip(hits, scores), key=lambda pair: pair[1], reverse=True)
+        return [h.name for h, _ in ranked]
+    except Exception as e:
+        logger.warning(f"Reranker unavailable ({e}); skipping rerank lane")
+        return []
+
+
 @lru_cache(maxsize=8)
 def _retriever_for(ecosystem: str) -> Retriever:
     return Retriever(ecosystem)
@@ -389,7 +456,8 @@ def retrieve_candidates(
        a per-query z-score when ``relevance_z_floor`` is configured), the index
        can't answer confidently — fall back to live registry search.
     3. Otherwise, run BM25 over the same metadata sidecar (top ``HYBRID_POOL``)
-       and fuse via RRF, weighting dense > BM25.
+       and fuse via RRF, weighting dense > BM25. When ``retrieval.reranker_model``
+       is configured, a cross-encoder reranker lane is fused in as well.
 
     When ``lite=True``, skip the semantic index entirely and use the registry
     search path directly (no shard download, no embedding model load).
@@ -426,16 +494,17 @@ def retrieve_candidates(
         logger.warning(f"BM25 search failed ({e}); using dense-only ranking")
         bm25_names = []
 
-    return _fuse_and_hydrate(retriever, dense_hits, bm25_names, max_results)
+    return _fuse_and_hydrate(retriever, task_description, dense_hits, bm25_names, max_results)
 
 
 def _fuse_and_hydrate(
     retriever: Retriever,
+    query: str,
     dense_hits: list[RetrievalHit],
     bm25_names: list[str],
     max_results: int,
 ) -> list[PackageCandidate]:
-    """Combine dense + BM25 rankings via RRF, then hydrate to candidates.
+    """Combine dense + BM25 (+ optional reranker) rankings via RRF, then hydrate.
 
     Hits keyed by name throughout — RRF fuses on name identity, then we
     reuse dense's pre-built RetrievalHit when available (carries similarity)
@@ -446,17 +515,31 @@ def _fuse_and_hydrate(
     dense_by_name = {h.name: h for h in dense_hits}
     dense_ranking = [h.name for h in dense_hits]
 
-    # Dense-only fast path: skip RRF when BM25 returned nothing useful.
-    if not bm25_names:
+    # Optional cross-encoder lane (off unless `retrieval.reranker_model` is set);
+    # [] when disabled or on any failure. Reranks the dense pool by direct
+    # (query, description) relevance — the strongest signal when present.
+    rerank_names = _rerank(query, dense_hits)
+
+    rankings: list[list[str]] = [dense_ranking]
+    weights: list[float] = [DENSE_WEIGHT]
+    if bm25_names:
+        rankings.append(bm25_names)
+        weights.append(BM25_WEIGHT)
+    if rerank_names:
+        rankings.append(rerank_names)
+        weights.append(_reranker_weight())
+
+    # Dense-only fast path: skip RRF when neither BM25 nor the reranker added a lane.
+    if len(rankings) == 1:
         return [_hit_to_candidate(h) for h in dense_hits[:max_results]]
 
     # Blend a popularity prior into the fusion so that, among the packages the
-    # two retrievers surface, the more-entrenched ones rank higher — closing the
+    # retrievers surface, the more-entrenched ones rank higher — closing the
     # gap where pure cosine/BM25 favors obscure name-matches over the popular
     # library a user actually wants. No-op on shards without the field.
     fused = reciprocal_rank_fusion(
-        [dense_ranking, bm25_names],
-        weights=[DENSE_WEIGHT, BM25_WEIGHT],
+        rankings,
+        weights=weights,
         priors=retriever.popularity_scores(),
         prior_weight=_popularity_weight(retriever.ecosystem),
     )
