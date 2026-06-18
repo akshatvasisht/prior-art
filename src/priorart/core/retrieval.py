@@ -81,6 +81,59 @@ def _popularity_weight(ecosystem: str) -> float:
     return _per_ecosystem_setting("popularity_weight", ecosystem, POPULARITY_WEIGHT)
 
 
+# Minimum dense-pool size for the z-score relevance gate to be statistically
+# meaningful; below this the absolute similarity floor is used instead.
+_MIN_POOL_FOR_Z = 5
+
+
+def _relevance_z_floor(ecosystem: str) -> float | None:
+    """Resolve the optional z-score relevance floor for ``ecosystem``.
+
+    ``retrieval.relevance_z_floor`` may be unset/null (→ ``None``, meaning the
+    absolute ``similarity_floor`` is used), a single float, or a per-ecosystem
+    mapping with a ``default`` key. Returns ``None`` on any miss or error.
+    """
+    try:
+        configured = load_config()["retrieval"].get("relevance_z_floor")
+        if configured is None:
+            return None
+        if isinstance(configured, dict):
+            value = configured.get(ecosystem)
+            if value is None:
+                value = configured.get("default")
+            return None if value is None else float(value)
+        return float(configured)
+    except Exception:
+        return None
+
+
+def _should_fall_back(dense_hits: list[RetrievalHit], ecosystem: str) -> bool:
+    """Decide whether to abandon the semantic index for live registry search.
+
+    Default mechanism is the absolute ``similarity_floor`` (bge raw cosine,
+    conservative). When ``retrieval.relevance_z_floor`` is configured, use a
+    per-query z-score gate instead — fall back when the top hit is fewer than
+    ``z_floor`` standard deviations above the dense-pool mean. Raw cosine is
+    query-incomparable (bge scores cluster ~[0.6, 1.0]), so an absolute floor
+    barely fires; the z-score asks "is the top hit meaningfully better than the
+    rest?" (see OPEN_ISSUES A20/A22). The absolute floor still backstops empty,
+    tiny, or degenerate (zero-variance) pools where the z-score is unreliable.
+    """
+    if not dense_hits:
+        return True
+    top1 = dense_hits[0].similarity
+    abs_floor = _similarity_floor(ecosystem)
+    z_floor = _relevance_z_floor(ecosystem)
+    if z_floor is None or len(dense_hits) < _MIN_POOL_FOR_Z:
+        return top1 < abs_floor
+    sims = [h.similarity for h in dense_hits]
+    mean = sum(sims) / len(sims)
+    std = (sum((s - mean) ** 2 for s in sims) / len(sims)) ** 0.5
+    if std < 1e-9:
+        return top1 < abs_floor
+    return bool((top1 - mean) / std < z_floor)
+
+
 # how many candidates to ask each retriever (dense, BM25) for before RRF
 # fusion. Larger pools deepen the fused tail without changing the head much
 # unless one retriever has a sharply different ranking — 50 is a reasonable
@@ -332,8 +385,9 @@ def retrieve_candidates(
 
     Pipeline:
     1. Run dense retrieval (top ``HYBRID_POOL``).
-    2. If dense top similarity < ``SIMILARITY_FLOOR``, the index can't answer
-       confidently — fall back to live registry search.
+    2. If the relevance gate trips (absolute ``similarity_floor`` by default, or
+       a per-query z-score when ``relevance_z_floor`` is configured), the index
+       can't answer confidently — fall back to live registry search.
     3. Otherwise, run BM25 over the same metadata sidecar (top ``HYBRID_POOL``)
        and fuse via RRF, weighting dense > BM25.
 
@@ -356,9 +410,9 @@ def retrieve_candidates(
         logger.warning(f"Semantic index unavailable ({e}); falling back to registry search")
         return _registry_fallback(task_description, language, max_results)
 
-    if not dense_hits or dense_hits[0].similarity < _similarity_floor(ecosystem):
+    if _should_fall_back(dense_hits, ecosystem):
         logger.info(
-            "Top semantic match below floor "
+            "Top semantic match below relevance floor "
             f"({dense_hits[0].similarity if dense_hits else 'n/a'}); "
             "falling back to registry search"
         )

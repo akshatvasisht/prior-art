@@ -105,6 +105,15 @@ retrieval:
   # applies to all ecosystems; a mapping (e.g. {default: 0.5, npm: 0.45}) sets
   # per-ecosystem floors once bench data justifies them.
   similarity_floor: 0.5
+  # Optional relevance gate. When set (float, or a per-ecosystem mapping with a
+  # `default` key), replaces the absolute similarity_floor with a per-query
+  # z-score test over the dense pool: fall back to registry search when the top
+  # hit is fewer than this many std-devs above the pool mean. Raw bge cosine is
+  # query-incomparable (scores cluster ~[0.6,1.0]) so the absolute floor barely
+  # fires; the z-score asks "is the top hit meaningfully better than the rest?".
+  # Off by default (null) pending a bench calibration pass; the absolute floor
+  # still backstops empty/tiny/zero-variance pools. See OPEN_ISSUES A20/A22.
+  relevance_z_floor: null
   # Convex weight on the popularity prior blended into the fused ranking: among
   # the packages dense+BM25 surface, the more-entrenched ones rank higher.
   # Per-ecosystem values calibrated against the bench (condensed nDCG@10 +
