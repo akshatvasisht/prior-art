@@ -35,7 +35,12 @@ from pathlib import Path
 from typing import Any
 
 from priorart.core.registry import PackageCandidate, get_registry_client
-from priorart.core.retrieval import retrieve_candidates
+from priorart.core.retrieval import (
+    HYBRID_POOL,
+    _ecosystem_for,
+    _retriever_for,
+    retrieve_candidates,
+)
 
 from .metrics import (
     aggregate,
@@ -80,6 +85,22 @@ BASELINES: dict[str, Callable[[str, str, int], list[str]]] = {
 }
 
 
+def _relevant_set(item: dict, language: str) -> dict[str, int]:
+    """Canonicalized relevant-name → grade map for a gold item.
+
+    Graded form (`relevant_grades`) preferred; older fixtures with a bare
+    `relevant` list map every doc to grade 1 (binary behavior preserved). Keys are
+    canonicalized with the same `_canonical_name` as retrieved names, so a
+    mixed-case fixture entry ("Requests") still matches a candidate ("requests").
+    """
+    if "relevant_grades" in item:
+        return {
+            _canonical_name(name, language): grade
+            for name, grade in item["relevant_grades"].items()
+        }
+    return {_canonical_name(name, language): 1 for name in item.get("relevant", [])}
+
+
 def evaluate(gold: list[dict], k: int, baselines: list[str]) -> dict[str, dict[str, float]]:
     """Run the configured baselines over ``gold`` and return mean metrics per baseline."""
     results: dict[str, list[dict]] = {b: [] for b in baselines}
@@ -87,18 +108,7 @@ def evaluate(gold: list[dict], k: int, baselines: list[str]) -> dict[str, dict[s
     for item in gold:
         query = item["query"]
         language = item["language"]
-        # graded form (`relevant_grades` -> dict). Older fixtures with a
-        # bare `relevant` list still parse — every doc gets grade=1 so binary
-        # behavior is preserved. Gold keys are canonicalized with the same
-        # _canonical_name as retrieved names, so a mixed-case fixture entry
-        # ("Requests") still matches the lowercased candidate ("requests").
-        if "relevant_grades" in item:
-            relevant = {
-                _canonical_name(name, language): grade
-                for name, grade in item["relevant_grades"].items()
-            }
-        else:
-            relevant = {_canonical_name(name, language): 1 for name in item.get("relevant", [])}
+        relevant = _relevant_set(item, language)
 
         for baseline in baselines:
             try:
@@ -141,6 +151,61 @@ def evaluate_stratified(
         out[language] = evaluate(by_language[language], k, baselines)
     out["overall"] = evaluate(gold, k, baselines)
     return out
+
+
+def _pool_z_stats(sims: list[float]) -> tuple[float, float, float, float | None]:
+    """``(top1, mean, std, z_top1)`` for a descending similarity pool.
+
+    ``z_top1`` is ``None`` for a degenerate (zero-variance) pool. Mirrors the gate
+    in ``retrieval._should_fall_back`` so calibration measures the same quantity.
+    """
+    top1 = sims[0]
+    mean = sum(sims) / len(sims)
+    std = (sum((s - mean) ** 2 for s in sims) / len(sims)) ** 0.5
+    z = (top1 - mean) / std if std > 1e-9 else None
+    return top1, mean, std, z
+
+
+def floor_stats(gold: list[dict], k: int) -> dict[str, list[dict]]:
+    """Per-query dense-pool stats grouped by language, to calibrate ``relevance_z_floor``.
+
+    For each gold query records the dense pool's top-1 similarity, mean, std,
+    z-score, and whether a relevant doc is in the pool. Comparing z for
+    relevant-present vs relevant-absent queries gives the per-ecosystem z-floor
+    that keeps confident queries while triggering fallback on the rest
+    (OPEN_ISSUES A20/A22). Needs the shards present (run against a built index).
+    """
+    pool_k = max(HYBRID_POOL, k)
+    out: dict[str, list[dict]] = defaultdict(list)
+    for item in gold:
+        language = item["language"]
+        relevant = set(_relevant_set(item, language))
+        try:
+            retriever = _retriever_for(_ecosystem_for(language))
+            hits = retriever.search_dense(item["query"], k=pool_k)
+        except Exception as e:
+            logger.warning(f"floor-stats failed for '{item['query']}/{language}': {e}")
+            continue
+        if not hits:
+            out[language].append(
+                {"query": item["query"], "n": 0, "z": None, "relevant_in_pool": False}
+            )
+            continue
+        sims = [h.similarity for h in hits]
+        top1, mean, std, z = _pool_z_stats(sims)
+        names = {_canonical_name(h.name, language) for h in hits}
+        out[language].append(
+            {
+                "query": item["query"],
+                "n": len(sims),
+                "top1": round(top1, 4),
+                "mean": round(mean, 4),
+                "std": round(std, 4),
+                "z": round(z, 3) if z is not None else None,
+                "relevant_in_pool": bool(names & relevant),
+            }
+        )
+    return dict(out)
 
 
 def _git_rev_parse(ref: str) -> str:
@@ -224,9 +289,20 @@ def main() -> None:
         default="semantic,registry",
         help="comma-separated subset of: semantic, registry",
     )
+    parser.add_argument(
+        "--floor-stats",
+        action="store_true",
+        help="emit per-query dense-pool z-stats for relevance_z_floor calibration, then exit",
+    )
     args = parser.parse_args()
 
     gold = _load_gold(args.fixture)
+
+    if args.floor_stats:
+        meta = build_meta(args.fixture)
+        print(json.dumps({"meta": meta, "floor_stats": floor_stats(gold, args.k)}, indent=2))
+        return
+
     baselines = [b.strip() for b in args.baselines.split(",") if b.strip() in BASELINES]
 
     # One JSON envelope (meta + results) makes downstream parsing trivial:
