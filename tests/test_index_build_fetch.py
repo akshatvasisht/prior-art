@@ -55,11 +55,15 @@ def test_fetch_ecosystem_yields_snapshot_records_and_dedupes():
 
 
 def test_iter_popular_snapshot_sorts_by_dependent_packages_count(tmp_path: Path):
-    """Python pulls top-N by dependent_packages_count in descending order."""
+    """Python pulls top-N by dependent_packages_count in descending order.
+
+    The tail row sits below python's long_tail_floor (3), so this stays a clean
+    top-N check; the floor's tail-inclusion is covered by _select_snapshot_rows tests.
+    """
     from scripts.index_build import fetch as fetch_mod
 
     rows = [
-        {"name": "low", "description": "tail", "dependent_packages_count": 5, "downloads": 100},
+        {"name": "low", "description": "tail", "dependent_packages_count": 2, "downloads": 100},
         {"name": "top", "description": "winner", "dependent_packages_count": 99, "downloads": 1},
         {"name": "mid", "description": "middle", "dependent_packages_count": 50, "downloads": 50},
     ]

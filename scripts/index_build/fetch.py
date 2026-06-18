@@ -33,6 +33,7 @@ import random
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -73,13 +74,36 @@ SNAPSHOT_REPO_ID = "priorart/package-snapshot"
 # the snapshot dataset. npm uses ``downloads`` because dependent-count
 # under-ranks npm-specific tooling that ships as standalone CLIs rather than
 # libraries others depend on.
-ECOSYSTEM_CONFIG = {
-    "python": {"popularity_key": "dependent_packages_count", "registry": "pypi"},
+# `long_tail_floor`: beyond the top-N head, also index packages whose
+# dependent_packages_count clears this bar (real-adoption long tail), capped at
+# top_n * _LONG_TAIL_CAP_MULTIPLIER. Grounded on the crates snapshot — the
+# dependent-count at the current cutoff is ~4, so a floor of 3 admits a modest
+# tail (~1.5x for crates) rather than the popularity cliff dropping niche-but-used
+# packages. npm sorts by `downloads` (a different, larger scale), so it has no
+# floor yet — its value needs a downloads-distribution measurement.
+ECOSYSTEM_CONFIG: dict[str, dict[str, Any]] = {
+    "python": {
+        "popularity_key": "dependent_packages_count",
+        "registry": "pypi",
+        "long_tail_floor": 3,
+    },
     "npm": {"popularity_key": "downloads", "registry": "npm"},
-    "crates": {"popularity_key": "dependent_packages_count", "registry": "cargo"},
-    "go": {"popularity_key": "dependent_packages_count", "registry": "go"},
-    "maven": {"popularity_key": "dependent_packages_count", "registry": "maven"},
-    "nuget": {"popularity_key": "dependent_packages_count", "registry": "nuget"},
+    "crates": {
+        "popularity_key": "dependent_packages_count",
+        "registry": "cargo",
+        "long_tail_floor": 3,
+    },
+    "go": {"popularity_key": "dependent_packages_count", "registry": "go", "long_tail_floor": 3},
+    "maven": {
+        "popularity_key": "dependent_packages_count",
+        "registry": "maven",
+        "long_tail_floor": 3,
+    },
+    "nuget": {
+        "popularity_key": "dependent_packages_count",
+        "registry": "nuget",
+        "long_tail_floor": 3,
+    },
 }
 
 
