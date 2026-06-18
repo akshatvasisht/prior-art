@@ -102,8 +102,39 @@ def _iter_fixture(ecosystem: str) -> Iterator[dict]:
                 yield json.loads(line)
 
 
+# Hard cap on long-tail inclusion, as a multiple of top_n, to bound shard size
+# when a long_tail_floor is configured.
+_LONG_TAIL_CAP_MULTIPLIER = 5
+
+
+def _select_snapshot_rows(
+    rows: list[dict], sort_key: str, top_n: int, long_tail_floor: float | None = None
+) -> list[dict]:
+    """Select rows for the shard, ranked by entrenchment (``sort_key`` desc).
+
+    Default (``long_tail_floor`` None): the top-``top_n`` head only. When a floor
+    is set, also keep any lower-ranked package still at/above it — niche-but-real
+    packages that the popularity cliff would otherwise drop, the #1 demo-coverage
+    risk (OPEN_ISSUES A22) — capped at ``top_n * _LONG_TAIL_CAP_MULTIPLIER`` to
+    bound shard size.
+    """
+    ranked = sorted(rows, key=lambda r: r.get(sort_key) or 0, reverse=True)
+    if long_tail_floor is None:
+        return ranked[:top_n]
+    cap = top_n * _LONG_TAIL_CAP_MULTIPLIER
+    return [
+        r
+        for i, r in enumerate(ranked[:cap])
+        if i < top_n or (r.get(sort_key) or 0) >= long_tail_floor
+    ]
+
+
 def _iter_popular_snapshot(ecosystem: str, top_n: int) -> Iterator[dict]:
-    """Yield up to ``top_n`` records from the HF Hub snapshot, ranked by entrenchment."""
+    """Yield records from the HF Hub snapshot, ranked by entrenchment.
+
+    Yields the top-``top_n`` head, plus the long tail above a per-ecosystem
+    ``long_tail_floor`` when one is configured (off by default).
+    """
     cfg = ECOSYSTEM_CONFIG[ecosystem]
     sort_key = cfg["popularity_key"]
     registry = cfg["registry"]
@@ -122,16 +153,16 @@ def _iter_popular_snapshot(ecosystem: str, top_n: int) -> Iterator[dict]:
             if line:
                 rows.append(json.loads(line))
 
-    rows.sort(key=lambda r: r.get(sort_key) or 0, reverse=True)
+    selected = _select_snapshot_rows(rows, sort_key, top_n, cfg.get("long_tail_floor"))
     logger.info(
-        "snapshot %s: %d rows; yielding top %d by %s",
+        "snapshot %s: %d rows; yielding %d by %s",
         ecosystem,
         len(rows),
-        top_n,
+        len(selected),
         sort_key,
     )
 
-    for row in rows[:top_n]:
+    for row in selected:
         name = (row.get("name") or "").strip()
         if not name:
             continue
