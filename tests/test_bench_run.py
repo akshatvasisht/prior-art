@@ -222,3 +222,79 @@ def test_handpicked_fixture_loads_and_evaluates():
         assert all(g == 2 for g in grades.values()), (
             f"non-grade-2 entry in {row['query']}: {grades}"
         )
+
+
+# --- relevance-set parsing + z-floor calibration instrumentation ---
+
+
+def test_relevant_set_graded_and_legacy():
+    graded = bench_run._relevant_set({"relevant_grades": {"Requests": 2, "httpx": 1}}, "python")
+    assert graded == {"requests": 2, "httpx": 1}  # canonicalized keys
+    legacy = bench_run._relevant_set({"relevant": ["Tokio", "serde"]}, "rust")
+    assert legacy == {"tokio": 1, "serde": 1}  # bare list → grade 1
+
+
+def test_pool_z_stats_normal_and_degenerate():
+    top1, mean, std, z = bench_run._pool_z_stats([0.9, 0.6, 0.6, 0.6, 0.6])
+    assert top1 == 0.9
+    assert z is not None and z > 1.5  # clear outlier
+    # zero-variance pool → z is None (degenerate)
+    _, _, std0, z0 = bench_run._pool_z_stats([0.7, 0.7, 0.7])
+    assert std0 < 1e-9  # effectively zero (float residual), caught as degenerate
+    assert z0 is None
+
+
+def _hit(name, sim):
+    from priorart.core.retrieval import RetrievalHit
+
+    return RetrievalHit(name, "pypi", "", None, sim)
+
+
+def test_floor_stats_records_z_and_relevant_in_pool():
+    retriever = type("R", (), {})()
+    retriever.search_dense = lambda q, k: [
+        _hit("requests", 0.9),
+        _hit("noise", 0.6),
+        _hit("x", 0.6),
+    ]
+    gold = [{"query": "http client", "language": "python", "relevant": ["requests"]}]
+    with patch.object(bench_run, "_retriever_for", lambda eco: retriever):
+        stats = bench_run.floor_stats(gold, k=10)
+    row = stats["python"][0]
+    assert row["relevant_in_pool"] is True
+    assert row["z"] is not None and row["top1"] == 0.9
+
+
+def test_floor_stats_empty_pool_and_error():
+    # empty dense pool → recorded with n=0
+    empty = type("R", (), {})()
+    empty.search_dense = lambda q, k: []
+    gold = [{"query": "q", "language": "python", "relevant": ["x"]}]
+    with patch.object(bench_run, "_retriever_for", lambda eco: empty):
+        stats = bench_run.floor_stats(gold, k=10)
+    assert stats["python"][0]["n"] == 0 and stats["python"][0]["relevant_in_pool"] is False
+
+    # retriever error → query skipped (no crash, language absent)
+    def _boom(eco):
+        raise RuntimeError("shard missing")
+
+    with patch.object(bench_run, "_retriever_for", _boom):
+        assert bench_run.floor_stats(gold, k=10) == {}
+
+
+def test_main_floor_stats_mode(tmp_path: Path, capsys):
+    fixture = tmp_path / "g.jsonl"
+    fixture.write_text(
+        json.dumps({"query": "http client", "language": "python", "relevant": ["requests"]}) + "\n",
+        encoding="utf-8",
+    )
+    retriever = type("R", (), {})()
+    retriever.search_dense = lambda q, k: [_hit("requests", 0.88), _hit("y", 0.6), _hit("z", 0.6)]
+    with (
+        patch.object(bench_run, "_retriever_for", lambda eco: retriever),
+        patch("sys.argv", ["bench.run", "--fixture", str(fixture), "--floor-stats"]),
+    ):
+        bench_run.main()
+    out = json.loads(capsys.readouterr().out)
+    assert "floor_stats" in out
+    assert out["floor_stats"]["python"][0]["relevant_in_pool"] is True
