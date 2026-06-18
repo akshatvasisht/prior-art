@@ -18,10 +18,17 @@ from priorart.core.retrieval import (
     _load_metadata,
     _popularity_weight,
     _registry_fallback,
+    _relevance_z_floor,
     _retriever_for,
+    _should_fall_back,
     _similarity_floor,
     retrieve_candidates,
 )
+
+
+def _hits(*sims: float) -> list[RetrievalHit]:
+    """Build a dense-hit pool with the given similarities (descending)."""
+    return [RetrievalHit(f"p{i}", "pypi", "", None, s) for i, s in enumerate(sims)]
 
 
 def test_similarity_floor_reads_config():
@@ -64,6 +71,86 @@ def test_similarity_floor_per_ecosystem_mapping(monkeypatch):
         retrieval, "load_config", lambda: {"retrieval": {"similarity_floor": {"npm": 0.45}}}
     )
     assert _similarity_floor("go") == SIMILARITY_FLOOR
+
+
+# --- _relevance_z_floor ---
+
+
+def test_relevance_z_floor_none_by_default():
+    # config.yaml ships relevance_z_floor: null → gate disabled.
+    assert _relevance_z_floor("python") is None
+
+
+def test_relevance_z_floor_missing_key_is_none(monkeypatch):
+    monkeypatch.setattr(retrieval, "load_config", lambda: {"retrieval": {}})
+    assert _relevance_z_floor("python") is None
+
+
+def test_relevance_z_floor_float(monkeypatch):
+    monkeypatch.setattr(retrieval, "load_config", lambda: {"retrieval": {"relevance_z_floor": 2.0}})
+    assert _relevance_z_floor("python") == 2.0
+
+
+def test_relevance_z_floor_per_ecosystem_mapping(monkeypatch):
+    monkeypatch.setattr(
+        retrieval,
+        "load_config",
+        lambda: {"retrieval": {"relevance_z_floor": {"default": 1.5, "npm": 2.0}}},
+    )
+    assert _relevance_z_floor("npm") == 2.0
+    assert _relevance_z_floor("python") == 1.5
+    # Mapping without a default: unlisted ecosystem → None (gate stays off).
+    monkeypatch.setattr(
+        retrieval, "load_config", lambda: {"retrieval": {"relevance_z_floor": {"npm": 2.0}}}
+    )
+    assert _relevance_z_floor("go") is None
+
+
+def test_relevance_z_floor_error_is_none(monkeypatch):
+    def _boom():
+        raise RuntimeError("no config")
+
+    monkeypatch.setattr(retrieval, "load_config", _boom)
+    assert _relevance_z_floor("python") is None
+
+
+# --- _should_fall_back ---
+
+
+def test_should_fall_back_no_hits():
+    assert _should_fall_back([], "python") is True
+
+
+def test_should_fall_back_default_absolute_floor():
+    # relevance_z_floor null in config → absolute similarity_floor (0.5) applies.
+    assert _should_fall_back(_hits(0.6), "python") is False
+    assert _should_fall_back(_hits(0.4), "python") is True
+
+
+def test_should_fall_back_zscore_passes_for_clear_outlier(monkeypatch):
+    monkeypatch.setattr(retrieval, "load_config", lambda: {"retrieval": {"relevance_z_floor": 1.5}})
+    # top1 ~2σ above the pool mean → trusted, no fallback.
+    assert _should_fall_back(_hits(0.9, 0.6, 0.6, 0.6, 0.6), "python") is False
+
+
+def test_should_fall_back_zscore_triggers_for_clustered_pool(monkeypatch):
+    monkeypatch.setattr(retrieval, "load_config", lambda: {"retrieval": {"relevance_z_floor": 1.5}})
+    # tightly clustered pool → top1 only ~1.4σ above mean → fall back.
+    assert _should_fall_back(_hits(0.72, 0.71, 0.70, 0.69, 0.68), "python") is True
+
+
+def test_should_fall_back_zscore_small_pool_uses_absolute(monkeypatch):
+    monkeypatch.setattr(retrieval, "load_config", lambda: {"retrieval": {"relevance_z_floor": 1.5}})
+    # Pool below _MIN_POOL_FOR_Z → absolute floor (0.5), not z-score.
+    assert _should_fall_back(_hits(0.9, 0.3), "python") is False
+    assert _should_fall_back(_hits(0.3), "python") is True
+
+
+def test_should_fall_back_zscore_zero_variance_uses_absolute(monkeypatch):
+    monkeypatch.setattr(retrieval, "load_config", lambda: {"retrieval": {"relevance_z_floor": 1.5}})
+    # Degenerate pool (no variance) → absolute floor backstop.
+    assert _should_fall_back(_hits(0.7, 0.7, 0.7, 0.7, 0.7), "python") is False
+    assert _should_fall_back(_hits(0.4, 0.4, 0.4, 0.4, 0.4), "python") is True
 
 
 def test_fuse_and_hydrate_returns_empty_for_nonpositive_max_results():
