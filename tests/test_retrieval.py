@@ -22,6 +22,7 @@ from priorart.core.retrieval import (
     _rerank,
     _reranker,
     _reranker_model,
+    _reranker_weight,
     _retriever_for,
     _should_fall_back,
     _similarity_floor,
@@ -177,9 +178,45 @@ def test_reranker_model_error_is_none(monkeypatch):
     assert _reranker_model() is None
 
 
+def test_reranker_weight_reads_config():
+    # config.yaml ships reranker_weight: 0.5.
+    assert _reranker_weight() == 0.5
+
+
+def test_reranker_weight_override_and_fallback(monkeypatch):
+    monkeypatch.setattr(retrieval, "load_config", lambda: {"retrieval": {"reranker_weight": 0.8}})
+    assert _reranker_weight() == 0.8
+
+    def _boom():
+        raise RuntimeError("no config")
+
+    monkeypatch.setattr(retrieval, "load_config", _boom)
+    assert _reranker_weight() == retrieval.RERANK_WEIGHT  # fallback
+
+
 def test_rerank_off_returns_empty():
     # No reranker_model configured → no-op, dense ranking untouched.
     assert _rerank("q", _hits(0.8, 0.7)) == []
+
+
+def test_rerank_builds_docs_handling_empty_description(monkeypatch):
+    monkeypatch.setattr(retrieval, "_reranker_model", lambda: "fake-model")
+    captured = {}
+    fake = MagicMock()
+
+    def _rr(query, docs):
+        captured["docs"] = list(docs)
+        return [0.0] * len(docs)
+
+    fake.rerank.side_effect = _rr
+    monkeypatch.setattr(retrieval, "_reranker", lambda name: fake)
+    hits = [
+        RetrievalHit("requests", "pypi", "HTTP for humans", None, 0.8),
+        RetrievalHit("bare", "pypi", "", None, 0.7),  # empty description
+    ]
+    _rerank("http", hits)
+    # described → "name. desc"; empty → bare name (no dangling period).
+    assert captured["docs"] == ["requests. HTTP for humans", "bare"]
 
 
 def test_rerank_empty_hits_returns_empty(monkeypatch):

@@ -146,11 +146,25 @@ HYBRID_POOL = 50
 DENSE_WEIGHT = 0.7
 BM25_WEIGHT = 0.3
 
-# Weight of the optional cross-encoder reranker lane in RRF fusion, used only
-# when `retrieval.reranker_model` is configured (off by default). A cross-encoder
-# scores (query, description) pairs directly, so it's the strongest relevance
-# signal when present — but the value wants bench calibration before enabling.
+# Fallback weight of the optional cross-encoder reranker lane in RRF fusion, used
+# only when `retrieval.reranker_model` is configured (off by default). A
+# cross-encoder scores (query, description) pairs directly, so it's the strongest
+# relevance signal when present. The value wants bench calibration before
+# enabling, so it lives in config (`retrieval.reranker_weight`); this constant is
+# the fallback when unset.
 RERANK_WEIGHT = 0.5
+
+
+def _reranker_weight() -> float:
+    """Resolve the reranker lane weight (`retrieval.reranker_weight`).
+
+    A single float; falls back to ``RERANK_WEIGHT`` on any miss or error. Lives in
+    config because it's a pending-calibration value tuned in the bench loop.
+    """
+    try:
+        return float(load_config()["retrieval"].get("reranker_weight", RERANK_WEIGHT))
+    except Exception:
+        return RERANK_WEIGHT
 
 
 def _reranker_model() -> str | None:
@@ -400,7 +414,7 @@ def _rerank(query: str, hits: list[RetrievalHit]) -> list[str]:
         return []
     try:
         reranker = _reranker(model_name)
-        docs = [f"{h.name}. {h.description}".strip() for h in hits]
+        docs = [f"{h.name}. {h.description}".strip() if h.description else h.name for h in hits]
         scores = list(reranker.rerank(query, docs))
         ranked = sorted(zip(hits, scores), key=lambda pair: pair[1], reverse=True)
         return [h.name for h, _ in ranked]
@@ -513,7 +527,7 @@ def _fuse_and_hydrate(
         weights.append(BM25_WEIGHT)
     if rerank_names:
         rankings.append(rerank_names)
-        weights.append(RERANK_WEIGHT)
+        weights.append(_reranker_weight())
 
     # Dense-only fast path: skip RRF when neither BM25 nor the reranker added a lane.
     if len(rankings) == 1:

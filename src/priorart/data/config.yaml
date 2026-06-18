@@ -122,6 +122,9 @@ retrieval:
   # cost; off pending a bench calibration pass. Fail-soft: a load/inference error
   # degrades to dense+BM25. See OPEN_ISSUES A22.
   reranker_model: null
+  # Weight of the reranker lane in RRF fusion (only used when reranker_model is
+  # set). Pending bench calibration; tune here rather than in code.
+  reranker_weight: 0.5
   # Convex weight on the popularity prior blended into the fused ranking: among
   # the packages dense+BM25 surface, the more-entrenched ones rank higher.
   # Per-ecosystem values calibrated against the bench (condensed nDCG@10 +
