@@ -93,7 +93,7 @@ Config lives in `src/priorart/data/config.yaml`. Top-level dimension weights, th
 | `scripts/index_build/` | Offline pipeline (ecosyste.ms S3 dump → slim JSONL on HF Hub → fastembed → usearch → sigstore → HF Hub) |
 | `.github/workflows/rebuild-index.yml` | Monthly GH Actions rebuild; identity-pinned sigstore signer |
 | `.github/workflows/extract-snapshot.yml` | Weekly probe + on-change streaming extract of the ecosyste.ms PostgreSQL dump into `priorart/package-snapshot` |
-| `bench/` | Retrieval benchmark harness (nDCG/Recall/MRR) + seed fixtures |
+| `bench/` | Retrieval benchmark harness (condensed nDCG@10 / Success@5). **Gold is awesome-list-derived and misaligned with the product goal — a regression smoke-test, not a quality signal; don't tune retrieval against it. Overhaul plan: `agentcontext/OPEN_ISSUES.md` A23.** |
 | `data/config.yaml` | All tunable parameters with research citations |
 
 ## Known gotchas
