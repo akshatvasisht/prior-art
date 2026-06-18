@@ -63,6 +63,10 @@ class DepsDevClient:
     # The reverse-dependency count lives only on the v3alpha version-scoped
     # `:dependents` resource; the stable v3 package response omits it.
     DEPENDENTS_BASE_URL = "https://api.deps.dev/v3alpha"
+    # Per-dependency advisory/deprecation flags come from the v3alpha batch
+    # endpoint (responses paginate 100/page; the loop is bounded as a guard).
+    VERSIONBATCH_URL = "https://api.deps.dev/v3alpha/versionbatch"
+    _VERSIONBATCH_MAX_PAGES = 20
 
     def __init__(self, timeout: int = 30):
         self.client = httpx.Client(timeout=timeout)
@@ -148,10 +152,9 @@ class DepsDevClient:
         dependency_info = None
         if latest_version:
             try:
-                dep_url = f"{package_url}/versions/{quote(latest_version, safe='')}"
-                dep_response = self.client.get(dep_url)
-                if dep_response.status_code == 200:
-                    dependency_info = self._parse_dependency_info(dep_response.json())
+                dependency_info = self._fetch_dependency_info(
+                    deps_ecosystem, package_name, latest_version
+                )
             except Exception:
                 pass
 
@@ -309,22 +312,63 @@ class DepsDevClient:
 
         return float(std_dev / mean_interval)
 
-    def _parse_dependency_info(self, version_data: dict) -> DependencyInfo:
-        """Parse dependency health information from version data."""
+    def _fetch_dependency_info(
+        self, ecosystem: str, package_name: str, version: str
+    ) -> DependencyInfo:
+        """Dependency-health counts via the v3 dependency graph + v3alpha batch.
+
+        deps.dev v3 dropped the embedded ``relations``/``resolvedDependencies``
+        from the version response. The resolved graph now lives on the dedicated
+        ``:dependencies`` sub-resource (one call → direct count + the resolved
+        dependency set), and per-dependency advisory/deprecation flags come from
+        a single batched ``versionbatch`` POST (paginated 100/page). Best-effort:
+        any failure (network, non-200, malformed body) yields zeros so a missing
+        graph never breaks scoring.
+        """
         info = DependencyInfo()
 
-        # Get dependency counts
-        relations = version_data.get("relations", [])
+        dep_url = (
+            f"{self.BASE_URL}/systems/{ecosystem}/packages/"
+            f"{quote(package_name, safe='')}/versions/{quote(version, safe='')}:dependencies"
+        )
+        resp = self.client.get(dep_url)
+        if resp.status_code != 200:
+            return info
 
-        direct_deps = [r for r in relations if r.get("relation") == "DIRECT"]
-        info.direct_count = len(direct_deps)
+        # The graph includes the package itself as a SELF node; the rest are the
+        # resolved (DIRECT + INDIRECT) dependencies.
+        dep_keys = []
+        for node in resp.json().get("nodes", []):
+            relation = node.get("relation")
+            version_key = node.get("versionKey")
+            if relation == "SELF" or not version_key:
+                continue
+            dep_keys.append(version_key)
+            if relation == "DIRECT":
+                info.direct_count += 1
 
-        # Count vulnerable and deprecated across all resolved dependencies
-        for dep in version_data.get("resolvedDependencies", []):
-            if dep.get("advisories"):
-                info.vulnerable_count += 1
-            if dep.get("isDeprecated"):
-                info.deprecated_count += 1
+        if not dep_keys:
+            return info
+
+        requests = [{"versionKey": k} for k in dep_keys]
+        page_token = ""
+        for _ in range(self._VERSIONBATCH_MAX_PAGES):
+            body: dict = {"requests": requests}
+            if page_token:
+                body["pageToken"] = page_token
+            batch_resp = self.client.post(self.VERSIONBATCH_URL, json=body)
+            if batch_resp.status_code != 200:
+                break
+            payload = batch_resp.json()
+            for item in payload.get("responses", []):
+                dep_version = item.get("version", {})
+                if dep_version.get("advisoryKeys"):
+                    info.vulnerable_count += 1
+                if dep_version.get("isDeprecated"):
+                    info.deprecated_count += 1
+            page_token = payload.get("nextPageToken", "")
+            if not page_token:
+                break
 
         return info
 

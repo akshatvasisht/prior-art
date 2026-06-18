@@ -3,6 +3,8 @@
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
+import pytest
+
 from priorart.core.deps_dev import (
     DepsDevClient,
     DepsDevData,
@@ -127,38 +129,104 @@ class TestMajorVersionsPerYear:
         assert self.client._calculate_major_versions_per_year(versions, first) == 0.0
 
 
-# --- _parse_dependency_info ---
+# --- _fetch_dependency_info ---
 
 
-class TestParseDependencyInfo:
+class TestFetchDependencyInfo:
     def setup_method(self):
         self.client = DepsDevClient.__new__(DepsDevClient)
+        self.client.client = MagicMock()
 
-    def test_parses_counts(self):
-        version_data = {
-            "relations": [
-                {"relation": "DIRECT"},
-                {"relation": "DIRECT"},
-                {"relation": "INDIRECT"},
-            ],
-            "resolvedDependencies": [
-                {"advisories": [{"id": "CVE-1"}]},
-                {"isDeprecated": True},
-                {},
-            ],
-        }
-        info = self.client._parse_dependency_info(version_data)
+    def _resp(self, status_code=200, json_data=None):
+        resp = MagicMock()
+        resp.status_code = status_code
+        resp.json.return_value = json_data or {}
+        return resp
 
-        assert info.direct_count == 2
-        assert info.vulnerable_count == 1
-        assert info.deprecated_count == 1
+    def _key(self, name):
+        return {"system": "PYPI", "name": name, "version": "1.0.0"}
 
-    def test_empty_data(self):
-        info = self.client._parse_dependency_info({})
+    def test_counts_from_graph_and_batch(self):
+        graph = self._resp(
+            200,
+            {
+                "nodes": [
+                    {"relation": "SELF", "versionKey": self._key("self")},
+                    {"relation": "DIRECT", "versionKey": self._key("a")},
+                    {"relation": "DIRECT", "versionKey": self._key("b")},
+                    {"relation": "INDIRECT", "versionKey": self._key("c")},
+                ]
+            },
+        )
+        batch = self._resp(
+            200,
+            {
+                "responses": [
+                    {"version": {"advisoryKeys": [{"id": "GHSA-x"}]}},
+                    {"version": {"isDeprecated": True}},
+                    {"version": {}},
+                ],
+                "nextPageToken": "",
+            },
+        )
+        self.client.client.get = MagicMock(return_value=graph)
+        self.client.client.post = MagicMock(return_value=batch)
+
+        info = self.client._fetch_dependency_info("pypi", "pkg", "1.0.0")
+
+        assert info.direct_count == 2  # DIRECT nodes only (SELF excluded)
+        assert info.vulnerable_count == 1  # one dep with advisoryKeys
+        assert info.deprecated_count == 1  # one deprecated dep
+
+    def test_dependencies_call_non_200(self):
+        self.client.client.get = MagicMock(return_value=self._resp(404, {}))
+        info = self.client._fetch_dependency_info("pypi", "pkg", "1.0.0")
 
         assert info.direct_count == 0
         assert info.vulnerable_count == 0
         assert info.deprecated_count == 0
+
+    def test_batch_call_non_200_keeps_direct_count(self):
+        graph = self._resp(200, {"nodes": [{"relation": "DIRECT", "versionKey": self._key("a")}]})
+        self.client.client.get = MagicMock(return_value=graph)
+        self.client.client.post = MagicMock(return_value=self._resp(429, {}))
+
+        info = self.client._fetch_dependency_info("pypi", "pkg", "1.0.0")
+
+        assert info.direct_count == 1  # graph parsed
+        assert info.vulnerable_count == 0  # batch failed, counts stay zero
+        assert info.deprecated_count == 0
+
+    def test_no_dependencies_skips_batch(self):
+        graph = self._resp(200, {"nodes": [{"relation": "SELF", "versionKey": self._key("self")}]})
+        self.client.client.get = MagicMock(return_value=graph)
+        self.client.client.post = MagicMock()
+
+        info = self.client._fetch_dependency_info("pypi", "pkg", "1.0.0")
+
+        assert info.direct_count == 0
+        self.client.client.post.assert_not_called()
+
+    def test_paginates_batch_responses(self):
+        graph = self._resp(
+            200,
+            {"nodes": [{"relation": "DIRECT", "versionKey": self._key(f"d{i}")} for i in range(3)]},
+        )
+        page1 = self._resp(
+            200, {"responses": [{"version": {"advisoryKeys": ["x"]}}], "nextPageToken": "tok"}
+        )
+        page2 = self._resp(
+            200, {"responses": [{"version": {"isDeprecated": True}}], "nextPageToken": ""}
+        )
+        self.client.client.get = MagicMock(return_value=graph)
+        self.client.client.post = MagicMock(side_effect=[page1, page2])
+
+        info = self.client._fetch_dependency_info("pypi", "pkg", "1.0.0")
+
+        assert info.direct_count == 3
+        assert info.vulnerable_count == 1
+        assert info.deprecated_count == 1
+        assert self.client.client.post.call_count == 2
 
 
 # --- _extract_github_url ---
@@ -291,20 +359,29 @@ class TestGetPackageData:
             },
         )
 
-        # Version detail response (dependency info for the latest version).
-        detail_resp = self._mock_response(
+        # Dependency graph (v3 :dependencies sub-resource) for the latest version.
+        deps_graph_resp = self._mock_response(
             200,
             {
-                "relations": [
-                    {"relation": "DIRECT"},
-                    {"relation": "DIRECT"},
-                    {"relation": "INDIRECT"},
+                "nodes": [
+                    {"relation": "SELF", "versionKey": {"system": "PYPI", "name": "requests"}},
+                    {"relation": "DIRECT", "versionKey": {"system": "PYPI", "name": "urllib3"}},
+                    {"relation": "DIRECT", "versionKey": {"system": "PYPI", "name": "certifi"}},
+                    {"relation": "INDIRECT", "versionKey": {"system": "PYPI", "name": "idna"}},
+                ]
+            },
+        )
+
+        # Per-dependency advisory/deprecation flags (v3alpha versionbatch POST).
+        batch_resp = self._mock_response(
+            200,
+            {
+                "responses": [
+                    {"version": {"advisoryKeys": [{"id": "GHSA-1"}]}},
+                    {"version": {"isDeprecated": True}},
+                    {"version": {}},
                 ],
-                "resolvedDependencies": [
-                    {"advisories": [{"id": "CVE-1"}]},
-                    {"isDeprecated": True},
-                    {},
-                ],
+                "nextPageToken": "",
             },
         )
 
@@ -314,12 +391,12 @@ class TestGetPackageData:
         def side_effect(url):
             if ":dependents" in url:
                 return dependents_resp
-            # The per-version detail call carries a version in the path.
-            if "/versions/" in url:
-                return detail_resp
+            if ":dependencies" in url:
+                return deps_graph_resp
             return pkg_resp
 
         self.client.client.get = side_effect
+        self.client.client.post = MagicMock(return_value=batch_resp)
 
         data = self.client.get_package_data("requests", "pypi")
 
@@ -570,3 +647,24 @@ class TestGetPackageDataDepInfoException:
         assert data is not None
         assert data.dependency_info is None
         assert data.latest_version == "1.0.0"
+
+
+# --- live contract checks ---
+
+
+@pytest.mark.integration
+class TestDepsDevLive:
+    """Live deps.dev checks — guard against the contract drift that left
+    dependency-health structurally zero (the v3 version response dropped
+    ``relations``/``resolvedDependencies``; the graph moved to ``:dependencies``).
+    A regression here means the dependency-health dimension is silently dead.
+    """
+
+    def test_dependency_health_returns_real_counts(self):
+        with DepsDevClient() as client:
+            data = client.get_package_data("requests", "pypi")
+        assert data is not None
+        assert data.dependency_info is not None
+        # `requests` has several direct dependencies (urllib3, certifi, idna, ...);
+        # a zero direct_count means the dependency-graph contract drifted again.
+        assert data.dependency_info.direct_count > 0

@@ -37,12 +37,15 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-def _hf_download_with_retry(*, attempts: int = 3, base_delay: float = 5.0, **kwargs) -> str:
+def _hf_download_with_retry(*, attempts: int = 6, base_delay: float = 15.0, **kwargs) -> str:
     """``hf_hub_download`` with exponential backoff on transient Hub errors.
 
-    Secondary guard behind huggingface_hub>=1.2.0's native 429 handling: a
-    rate-limit burst can still surface as a fatal ``LocalEntryNotFoundError``,
-    so retry with backoff + jitter rather than fail the build.
+    Secondary guard behind huggingface_hub's native handling, which does **not**
+    honor a 429 ``Retry-After`` (huggingface/huggingface_hub#2360), so a
+    rate-limit burst on the largest snapshot can still surface as a fatal error.
+    Retry with a wide backoff + jitter (pair with ``HF_HUB_DOWNLOAD_TIMEOUT`` in
+    CI). The 2026-06 npm-shard 429 exhausted the prior 3x/5s in ~30s and needed a
+    manual re-trigger; 6x/15s rides out a multi-minute rate-limit window.
     """
     from huggingface_hub import hf_hub_download  # type: ignore
 

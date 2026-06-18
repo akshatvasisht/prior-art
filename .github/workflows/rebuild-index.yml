@@ -32,6 +32,10 @@ jobs:
       # but priorart/package-snapshot is public, so it's only needed for
       # higher rate limits during the initial download.
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      # The largest snapshot download trips HF Hub's 429 under load; the 10s
+      # defaults are too aggressive. Raise them and lean on fetch.py's backoff.
+      HF_HUB_DOWNLOAD_TIMEOUT: "300"
+      HF_HUB_ETAG_TIMEOUT: "30"
     strategy:
       fail-fast: false
       # Cap concurrency so the six shard jobs don't fire their HF Hub snapshot
@@ -77,10 +81,12 @@ jobs:
 
   assemble-and-publish:
     needs: build-shard
-    # Run even when some shards failed; the assemble step reuses prior shards
-    # from HF Hub for any ecosystem not rebuilt this run, and refuses to
-    # publish only if zero shards were rebuilt.
-    if: ${{ !cancelled() }}
+    # Publish only when every shard rebuilt successfully. The matrix always
+    # builds all six ecosystems (no selective-rebuild path), and `fail-fast:
+    # false` lets every leg finish, so `result == 'success'` is true iff all six
+    # succeeded — a single failed shard blocks publish rather than shipping a
+    # stale shard for that ecosystem.
+    if: ${{ needs.build-shard.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
